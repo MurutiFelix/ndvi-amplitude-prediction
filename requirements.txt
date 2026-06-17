@@ -1,0 +1,6 @@
+numpy
+scipy
+rasterio
+pymannkendall
+tqdm
+matplotlib
