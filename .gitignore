@@ -1,0 +1,15 @@
+# Python bytecode caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local virtual environment
+.venv/
+venv/
+
+# Local Data Storage (Never upload massive spatial rasters/CSVs to GitHub)
+data/
+
+# IDE configs
+.vscode/

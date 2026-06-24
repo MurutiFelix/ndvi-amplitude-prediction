@@ -2,7 +2,7 @@
 spatial:
   height: 159
   width: 181
-  crs: "SR-ORG:6842"  # Or your specific MODIS Sinusoidal EPSG string
+  crs: "SR-ORG:6842"
 
 paths:
   raw_dir: "data/raw"
@@ -11,9 +11,7 @@ paths:
   
   ndvi_template: "data/raw/NDVI_2006_01.tif"
   twi: "data/static/TWI.tif"
-  soil_zip: "data/static/DSMW.zip"
-  precip_nc: "data/raw/precipitation.nc"
+  soil_raster: "data/static/Soil_DSMW.tif"
 
 features:
-  time_lags_months: 1
-  train_split_year: 2021  # Train: 2006-2021, Test: 2022-2025
+  train_split_year: 2021
