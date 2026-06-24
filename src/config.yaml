@@ -1,0 +1,19 @@
+# src/config.yaml
+spatial:
+  height: 159
+  width: 181
+  crs: "SR-ORG:6842"  # Or your specific MODIS Sinusoidal EPSG string
+
+paths:
+  raw_dir: "data/raw"
+  static_dir: "data/static"
+  processed_dir: "data/processed"
+  
+  ndvi_template: "data/raw/NDVI_2006_01.tif"
+  twi: "data/static/TWI.tif"
+  soil_zip: "data/static/DSMW.zip"
+  precip_nc: "data/raw/precipitation.nc"
+
+features:
+  time_lags_months: 1
+  train_split_year: 2021  # Train: 2006-2021, Test: 2022-2025
