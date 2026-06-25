@@ -1,6 +1,7 @@
 # src/models/train.py
 import os
 import yaml
+import numpy as np
 import pandas as pd
 from src.data.dataset import build_tabular_dataset
 from src.models.baselines import BaselineModelEvaluator
@@ -16,11 +17,23 @@ def main():
     if not os.path.exists(processed_csv_path):
         print("Tabular dataset matrix not found in data/processed/. Running spatial compilation pipeline...")
         df_compiled = build_tabular_dataset(config)
+        
+        if df_compiled.empty:
+            print("\n[ERROR]: Compiled dataset is completely empty! Check raster spatial intersections.")
+            return
+            
         df_compiled.to_csv(processed_csv_path, index=False)
         print(f"Successfully compiled and saved matrix to {processed_csv_path}")
     
     print("Loading compiled matrix for baseline validation...")
     df = pd.read_csv(processed_csv_path)
+    
+    # --- HARD TYPE CAST: Explicitly strip any 'object' wrappers from disk storage ---
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce').astype(np.float64)
+        
+    # Drop any row that couldn't convert cleanly to clear anomalies
+    df = df.dropna()
     
     # Initialize baseline engine
     evaluator = BaselineModelEvaluator(config)
@@ -31,15 +44,21 @@ def main():
         train_split_year=config['features']['train_split_year']
     )
     
+    # Clean out any remaining underlying pandas block-manager types
+    X_train = pd.DataFrame(X_train).astype(np.float64)
+    X_test = pd.DataFrame(X_test).astype(np.float64)
+    y_train = pd.Series(y_train).astype(np.float64)
+    y_test = pd.Series(y_test).astype(np.float64)
+    
     print(f"Training shapes -> Train: {X_train.shape[0]} rows | Test: {X_test.shape[0]} rows")
     print("Training OLS, GLM, and Random Forest baselines side-by-side...")
     
     metrics_df = evaluator.train_and_evaluate(X_train, X_test, y_train, y_test)
     
-    print("\n=== BASELINE MODEL PERFORMANCE ON FORWARD TEST SET (2022-2025) ===")
+    print("\n=== BASELINE MODEL PERFORMANCE ON FORWARD TEST SET ===")
     print(metrics_df.to_string())
     
-    # Save performance metrics next to your Mann-Kendall trend targets
+    # Save performance metrics next to your spatial targets
     metrics_df.to_csv(os.path.join(config['paths']['processed_dir'], "baseline_metrics.csv"))
     print("\nBaseline modeling complete. Output metrics successfully saved.")
 

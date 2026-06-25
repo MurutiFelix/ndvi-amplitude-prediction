@@ -48,6 +48,9 @@ def build_tabular_dataset(config):
         lst_minus1 = align_raster(lst_files[i-1], template_path).values.flatten()
         precip_minus1 = align_raster(precip_files[i-1], template_path).values.flatten()
         
+        # --- Guard against GEE background/negative NoData masks ---
+        precip_minus1 = np.where(precip_minus1 < 0, np.nan, precip_minus1)
+        
         # Pull annual population density based on the target year (Pop_Density_YYYY.tif)
         pop_path = os.path.join(raw_dir, f"Pop_Density_{year}.tif")
         if os.path.exists(pop_path):
@@ -55,13 +58,27 @@ def build_tabular_dataset(config):
         else:
             pop_flat = np.full_like(ndvi_t, np.nan)
             
-        # Mathematical transformations: log(y) and log(x + 1)
-        log_ndvi = np.log(ndvi_t)
-        log_precip = np.log(precip_minus1 + 1)
+        # --- Safe Mathematical transformations ---
+        # Initialize empty arrays for logs to preserve original structural array dimensions
+        log_ndvi = np.full_like(ndvi_t, np.nan)
+        log_precip = np.full_like(precip_minus1, np.nan)
         
-        # Extract active spatial values, skipping water masks and null regions
+        # Vectorized mask calculation: evaluate only where values are positive and real
+        valid_ndvi_mask = (ndvi_t > 0) & (~np.isnan(ndvi_t))
+        valid_precip_mask = (precip_minus1 >= 0) & (~np.isnan(precip_minus1))
+        
+        log_ndvi[valid_ndvi_mask] = np.log(ndvi_t[valid_ndvi_mask])
+        log_precip[valid_precip_mask] = np.log(precip_minus1[valid_precip_mask] + 1)
+        
+        # Extract active spatial values, skipping water masks, clouds, and null regions
         for idx in range(len(ndvi_t)):
-            if np.isnan(ndvi_t[idx]) or ndvi_t[idx] <= 0 or np.isnan(lst_minus1[idx]) or np.isnan(precip_minus1[idx]):
+            # --- CRITICAL FIX: Explicitly drop row if ANY variable (including TWI, Soil, Pop) contains NaN ---
+            if (np.isnan(ndvi_t[idx]) or ndvi_t[idx] <= 0 or 
+                np.isnan(lst_minus1[idx]) or 
+                np.isnan(precip_minus1[idx]) or
+                np.isnan(twi_flat[idx]) or 
+                np.isnan(soil_flat[idx]) or 
+                np.isnan(pop_flat[idx])):
                 continue
                 
             all_rows.append({

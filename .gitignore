@@ -8,7 +8,7 @@ __pycache__/
 .venv/
 venv/
 
-# Local Data Storage (Never upload massive spatial rasters/CSVs to GitHub)
+# Local Data Storage 
 data/
 
 # IDE configs
