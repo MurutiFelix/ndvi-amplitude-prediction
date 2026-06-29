@@ -71,25 +71,37 @@ def build_tabular_dataset(config):
         log_precip[valid_precip_mask] = np.log(precip_minus1[valid_precip_mask] + 1)
         
         # Extract active spatial values, skipping water masks, clouds, and null regions
-        for idx in range(len(ndvi_t)):
-            # --- CRITICAL FIX: Explicitly drop row if ANY variable (including TWI, Soil, Pop) contains NaN ---
-            if (np.isnan(ndvi_t[idx]) or ndvi_t[idx] <= 0 or 
-                np.isnan(lst_minus1[idx]) or 
-                np.isnan(precip_minus1[idx]) or
-                np.isnan(twi_flat[idx]) or 
-                np.isnan(soil_flat[idx]) or 
-                np.isnan(pop_flat[idx])):
-                continue
-                
-            all_rows.append({
-                'year': year,
-                'month': month,
-                'log_ndvi': log_ndvi[idx],
-                'lst_driver_lag1': lst_minus1[idx],
-                'log_precip_driver_lag1': log_precip[idx],
-                'pop_density': pop_flat[idx],
-                'twi': twi_flat[idx],
-                'soil_snum': soil_flat[idx]
-            })
+        # --- Vectorized validity mask across ALL variables simultaneously ---
+        valid = (
+            (ndvi_t > 0)         & ~np.isnan(ndvi_t)      &
+            ~np.isnan(lst_minus1)                          &
+            ~np.isnan(precip_minus1)                       &
+            ~np.isnan(twi_flat)                            &
+            ~np.isnan(soil_flat)                           &
+            ~np.isnan(pop_flat)
+        )
+
+        n_valid = valid.sum()
+        if n_valid == 0:
+            print(f"  Warning: No valid pixels for {year}-{month:02d}. Skipping.")
+            continue
+
+        all_rows.append(pd.DataFrame({
+            'year'                   : np.full(n_valid, year,  dtype=np.int32),
+            'month'                  : np.full(n_valid, month, dtype=np.int32),
+            'log_ndvi'               : log_ndvi[valid],
+            'lst_driver_lag1'        : lst_minus1[valid],
+            'log_precip_driver_lag1' : log_precip[valid],
+            'pop_density'            : pop_flat[valid],
+            'twi'                    : twi_flat[valid],
+            'soil_snum'              : soil_flat[valid],
+        }))
             
-    return pd.DataFrame(all_rows)
+    if not all_rows:
+        print("[ERROR]: No valid data blocks compiled. Check raster spatial intersections.")
+        return pd.DataFrame()
+
+    print(f"\nConcatenating {len(all_rows)} timestep blocks...")
+    df = pd.concat(all_rows, ignore_index=True)
+    print(f"Final dataset shape: {df.shape[0]:,} rows × {df.shape[1]} columns")
+    return df

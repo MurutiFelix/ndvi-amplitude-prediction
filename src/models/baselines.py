@@ -36,8 +36,8 @@ class BaselineModelEvaluator:
         
         return X_train, X_test, y_train, y_test
 
-    def train_and_evaluate(self, X_train, X_test, y_train, y_test):
-        """Trains OLS, GLM, and Random Forest, returning metrics for comparison."""
+    def evaluate_all(self, X_train, X_test, y_train, y_test):
+        """Trains and evaluates OLS, GLM Gaussian (on log-NDVI), and Random Forest."""
         results = {}
         
         # 1. Train & Evaluate OLS
@@ -45,26 +45,27 @@ class BaselineModelEvaluator:
         ols_preds = self.models["OLS"].predict(X_test)
         results["OLS"] = self._compute_metrics(y_test, ols_preds)
         
-        # 2. Train & Evaluate GLM (Gamma Family with Log Link)
-        # Statsmodels is used for GLM to access robust statistical summary tables
+        # 2. Train & Evaluate GLM (Gaussian Family with Identity Link)
         X_train_const = sm.add_constant(X_train)
         X_test_const = sm.add_constant(X_test, has_constant='add')
         
-        # Ensure target is strictly positive for Gamma GLM
-        y_train_shifted = y_train + abs(y_train.min()) + 0.01
-        y_test_shifted = y_test + abs(y_train.min()) + 0.01
-        
-        self.glm_model = sm.GLM(y_train_shifted, X_train_const, family=sm.families.Gamma(link=sm.families.links.Log()))
+        # Fits linear relationship cleanly on log_ndvi scale
+        self.glm_model = sm.GLM(
+            y_train, 
+            X_train_const, 
+            family=sm.families.Gaussian(link=sm.families.links.Identity())
+        )
         self.glm_results = self.glm_model.fit()
-        glm_preds = self.glm_results.predict(X_test_const) - (abs(y_train.min()) + 0.01)
-        results["GLM_Gamma"] = self._compute_metrics(y_test, glm_preds)
+        glm_preds = self.glm_results.predict(X_test_const)
+        
+        results["GLM_Gaussian"] = self._compute_metrics(y_test, glm_preds)
         
         # 3. Train & Evaluate Random Forest
         self.models["RandomForest"].fit(X_train, y_train)
         rf_preds = self.models["RandomForest"].predict(X_test)
         results["RandomForest"] = self._compute_metrics(y_test, rf_preds)
         
-        return pd.DataFrame(results).T
+        return results
 
     def _compute_metrics(self, y_true, y_pred):
         rmse = np.sqrt(mean_squared_error(y_true, y_pred))
