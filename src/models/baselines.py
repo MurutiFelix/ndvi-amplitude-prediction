@@ -8,7 +8,7 @@ import xgboost as xgb
 import statsmodels.api as sm
 from sklearn.metrics import r2_score, mean_squared_error
 
-class BaselineModelEvaluator:
+class NDVIBaselines:
     def __init__(self, config=None):
         self.config = config
         self.models = {

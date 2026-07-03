@@ -4,7 +4,7 @@ import yaml
 import numpy as np
 import pandas as pd
 from src.data.dataset import build_tabular_dataset
-from src.models.baselines import BaselineModelEvaluator
+from src.models.baselines import NDVIBaselines as BaselineModelEvaluator
 
 def main():
     # Load configuration parameters
