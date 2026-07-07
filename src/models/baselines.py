@@ -111,7 +111,7 @@ class NDVIBaselines:
         )
 
         # 3. Random Forest
-        print("Training Random Forest (this may take a few minutes on HPC)...")
+        print("Training Random Forest ...")
         self.models["RandomForest"].fit(X_train, y_train)
         results["RandomForest"] = self._compute_metrics(
             y_test, self.models["RandomForest"].predict(X_test)
@@ -124,7 +124,7 @@ class NDVIBaselines:
         ).sort_values(ascending=False)
 
         # 4. XGBoost with early stopping
-        print("Training XGBoost (early stopping active, patience=30)...")
+        print("XGBoost (early stopping active, patience=30)...")
         self.models["XGBoost"].fit(
             X_train, y_train,
             eval_set=[(X_test, y_test)],
