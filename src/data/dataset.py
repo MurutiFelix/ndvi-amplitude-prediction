@@ -101,7 +101,7 @@ def build_tabular_dataset(config):
             print(f"  Warning: Pop_Density_{year}.tif not found — filling with NaN.")
             pop_flat = np.full_like(ndvi_t, np.nan, dtype=np.float64)
 
-        # --- Safe log transforms (vectorized, NaN-preserving) ---
+        # ---log transforms (vectorized, NaN-preserving) ---
         log_ndvi = np.where(
             (ndvi_t > 0) & ~np.isnan(ndvi_t),
             np.log(ndvi_t),
