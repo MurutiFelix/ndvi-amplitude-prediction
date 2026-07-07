@@ -1,5 +1,4 @@
-# A mini project based on the paper "Forecasting vegetation dynamics in an open ecosystem by integrating deep 
-# learning and environmental variables " by Yue Ma et.al,(2022)
+# A mini project based on the paper "Forecasting vegetation dynamics in an open ecosystem by integrating deep learning and environmental variables  " by Yue Ma et.al,(2022)
 
 **Paper:** Yue Ma et.al,(2022) — ndvi-amplitude-prediction: A torch spatio-temporal models comparison
 **Task:**  forecast vegetation state (predict ndvi)
@@ -30,6 +29,6 @@ Note: The Data folder isnt available online as its huge--details on how to get t
 │   │   └── loss.py                     # Custom loss functions tailored for spatial optimization and amplitude variance penalties
 │   └── utils/                          # Utilitiies
 │       └── spatial.py                  # Spatial helper functions (coordinate conversions, windowing, spatial weight matrices)
-└── requirements.txt                   # Project environment dependencies lockfile (pip packages like scikit-learn, xgboost, rasterio)   
+└── requirements.txt                   # Project environment dependencies lockfile    
 
 ```
