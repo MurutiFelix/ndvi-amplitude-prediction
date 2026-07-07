@@ -78,9 +78,12 @@ class NDVIBaselines:
         y_test  = df_encoded.loc[test_mask,  'log_ndvi'].astype(np.float64)
 
         # --- Standardize continuous features (fit on train only) ---
-        continuous_cols = [
-            'lst_driver_lag1', 'log_precip_driver_lag1', 'pop_density',
+        ccontinuous_cols = [
+            'lst_driver_lag1', 'lst_driver_lag2', 'lst_driver_lag3',
+            'log_precip_driver_lag1', 'log_precip_driver_lag2', 'log_precip_driver_lag3',
+            'ndvi_spatial_lag', 'pop_density',
             'twi', 'year_trend', 'lst_x_precip', 'twi_x_precip', 'twi_x_lst'
+        ]
         ]
         X_train[continuous_cols] = self.scaler.fit_transform(X_train[continuous_cols])
         X_test[continuous_cols]  = self.scaler.transform(X_test[continuous_cols])
