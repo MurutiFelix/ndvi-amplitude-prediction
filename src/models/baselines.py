@@ -29,12 +29,15 @@ class NDVIBaselines:
                 colsample_bytree=0.8,
                 random_state=42,
                 n_jobs=-1,
-                tree_method='hist'
+                tree_method='hist',
+                early_stopping_rounds=30
             )
         }
         self.glm_model = None
+        self.glm_results = None
         self.scaler = StandardScaler()
         self.features = []
+        self.rf_feature_importance = None
 
     def prepare_data(self, df, train_split_year=2021):
         """
@@ -89,10 +92,13 @@ class NDVIBaselines:
         results = {}
 
         # 1. OLS
+        print("Training OLS...")
         self.models["OLS"].fit(X_train, y_train)
         results["OLS"] = self._compute_metrics(y_test, self.models["OLS"].predict(X_test))
 
-        # 2. GLM Gaussian
+        # 2. GLM Gaussian (Identity link on log_ndvi — equivalent to OLS
+        #    but provides full statsmodels summary: AIC, p-values, deviance)
+        print("Training GLM Gaussian...")
         X_train_const = sm.add_constant(X_train)
         X_test_const  = sm.add_constant(X_test, has_constant='add')
         self.glm_model   = sm.GLM(
@@ -100,26 +106,37 @@ class NDVIBaselines:
             family=sm.families.Gaussian(link=sm.families.links.Identity())
         )
         self.glm_results = self.glm_model.fit()
-        results["GLM_Gaussian"] = self._compute_metrics(y_test, self.glm_results.predict(X_test_const))
+        results["GLM_Gaussian"] = self._compute_metrics(
+            y_test, self.glm_results.predict(X_test_const)
+        )
 
         # 3. Random Forest
         print("Training Random Forest (this may take a few minutes on HPC)...")
         self.models["RandomForest"].fit(X_train, y_train)
-        results["RandomForest"] = self._compute_metrics(y_test, self.models["RandomForest"].predict(X_test))
+        results["RandomForest"] = self._compute_metrics(
+            y_test, self.models["RandomForest"].predict(X_test)
+        )
 
-        # 4. XGBoost
-        print("Training XGBoost...")
+        # --- Extract and store RF feature importances ---
+        self.rf_feature_importance = pd.Series(
+            self.models["RandomForest"].feature_importances_,
+            index=X_train.columns
+        ).sort_values(ascending=False)
+
+        # 4. XGBoost with early stopping
+        print("Training XGBoost (early stopping active, patience=30)...")
         self.models["XGBoost"].fit(
             X_train, y_train,
             eval_set=[(X_test, y_test)],
             verbose=100
         )
-        results["XGBoost"] = self._compute_metrics(y_test, self.models["XGBoost"].predict(X_test))
+        results["XGBoost"] = self._compute_metrics(
+            y_test, self.models["XGBoost"].predict(X_test)
+        )
 
         return results
-       
 
     def _compute_metrics(self, y_true, y_pred):
         rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-        r2 = r2_score(y_true, y_pred)
+        r2   = r2_score(y_true, y_pred)
         return {"R2_Score": r2, "RMSE": rmse}

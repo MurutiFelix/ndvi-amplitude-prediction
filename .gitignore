@@ -11,8 +11,8 @@ venv/
 # Local Data Storage 
 data/
 
-# Logs
-src/logs/
-
 # IDE configs
 .vscode/
+
+# hpc logs
+src/logs/
