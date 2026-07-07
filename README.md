@@ -1,12 +1,15 @@
-A mini project based on the paper "Forecasting vegetation dynamics in an open ecosystem by integrating deep 
-learning and environmental variables " by Yue Ma et.al,(2022)
+# A mini project based on the paper "Forecasting vegetation dynamics in an open ecosystem by integrating deep 
+# learning and environmental variables " by Yue Ma et.al,(2022)
 
-Paper: Yue Ma et.al,(2022) — Cross-platform super-resolution: A torch spatio-temporal models comparison
-Task:  forecast vegetation state (predict ndvi)
-Hardware target: KENET HPC — 2× NVIDIA L40 (48 GB each), 96 cores, 355 GB RAM per node
+**Paper:** Yue Ma et.al,(2022) — ndvi-amplitude-prediction: A torch spatio-temporal models comparison
+**Task:**  forecast vegetation state (predict ndvi)
+**Hardware target:** KENET HPC — 2× NVIDIA L40 (48 GB each), 96 cores, 355 GB RAM per node
+---
 
-Folder Structure
+## Folder Structure
 Note: The Data folder isnt available online as its huge--details on how to get the datasets are provided
+
+```
 
 ├── data/                              # ALL EXPERIMENT DATA MODALITIES 
 │   ├── raw/                            # Dynamic spatiotemporal rasters (.tif) from MODIS & ERA5 (NDVI, LST, Precip), and population ratsers
@@ -28,3 +31,5 @@ Note: The Data folder isnt available online as its huge--details on how to get t
 │   └── utils/                          # Utilitiies
 │       └── spatial.py                  # Spatial helper functions (coordinate conversions, windowing, spatial weight matrices)
 └── requirements.txt                   # Project environment dependencies lockfile (pip packages like scikit-learn, xgboost, rasterio)   
+
+```
