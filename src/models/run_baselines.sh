@@ -26,5 +26,7 @@ echo "Running from: $(pwd)"
 echo "Using python: $(which python)"
 
 # --- Run ---
-python -m src.models.train
+# Fully trains baseline models, extracts spatial diagnostics, and sweeps hyperparameters
+python -m src.models.analyze_and_tune
+
 echo "Job finished on: $(date)"
