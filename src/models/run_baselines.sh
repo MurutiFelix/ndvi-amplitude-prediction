@@ -27,6 +27,6 @@ echo "Using python: $(which python)"
 
 # --- Run ---
 # Fully trains baseline models, extracts spatial diagnostics, and sweeps hyperparameters
-python -m src.models.analyze_and_tune
+python -m src.data.analyze_and_tune
 
 echo "Job finished on: $(date)"
