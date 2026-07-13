@@ -1,4 +1,4 @@
-# A mini project based on the paper "Forecasting vegetation dynamics in an open ecosystem by integrating deep learning and environmental variables  " by Yue Ma et.al,(2022)
+# A mini project based on the paper "Forecasting vegetation dynamics in an open ecosystem by integrating deep learning and environmental variables "  
 
 **Paper:** Yue Ma et.al,(2022) — ndvi-amplitude-prediction: A torch spatio-temporal models comparison
 **Task:**  forecast vegetation state (predict ndvi)
