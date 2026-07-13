@@ -17,6 +17,7 @@ Note: The Data folder isnt available online as its huge--details on how to get t
 ├── src/                               # MAIN SOURCE CODE HERE 
 │   ├── config.yaml                     # Centralized pipeline configuration (hyperparameters, paths, random seeds, lags)
 │   ├── train.py                        # Root execution orchestrator that imports modules to run the entire end-to-end pipeline
+│   ├── predict.py                       
 │   ├── logs/                           # Automated cluster logs directory (captures stdout/stderr from Slurm execution runs)
 │   ├── data/                           # Data Engineering
 │   │   ├── dataset.py                  # Custom PyTorch Dataset/Loader streaming architectures for neural network training
