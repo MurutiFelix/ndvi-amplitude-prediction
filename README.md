@@ -34,3 +34,148 @@ Note: The Data folder isnt available online as its huge--details on how to get t
 └── requirements.txt                   # Project environment dependencies lockfile    
 
 ```
+## Step 1 — Clone to scratch 
+
+```bash
+cd /scratch/lustre/users/$USER
+git clone https://github.com/YOUR_USERNAME/project.git
+cd project
+```
+
+---
+
+## Step 2 — Load the GPU Python module
+
+```bash
+module load applications/eng/gpu/python/conda-26.1.0-python-3.14
+```
+
+Verify:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+---
+
+## Step 3 — Install dependencies
+
+```bash
+pip install -r requirements.txt \
+    --extra-index-url https://download.pytorch.org/whl/cu121
+```
+
+---
+
+## Step 4 — Upload your data
+
+Place GeoTIFF files under scratch:
+
+```
+/scratch/lustre/users/$USER/project/data/
+
+data/                                 # ALL EXPERIMENT DATA MODALITIES 
+    ├── raw/                            # Dynamic spatiotemporal rasters (.tif) from MODIS & ERA5 (NDVI, LST, Precip), and population ratsers
+    ├── static/                         # Landscape-invariant rasters (.tif) dictating constraints (TWI, Soil DSMW)
+    └── processed/                      # Output matrix cache (tabular_dataset.csv, baseline scores, GLM regression reports)
+
+```
+
+---
+
+## Step 5 — Run a debug job first 
+
+```bash
+mkdir -p /scratch/lustre/users/$USER/project/logs
+sbatch debug.slurm
+```
+
+Monitor:
+```bash
+squeue -u $USER
+tail -f /scratch/lustre/users/$USER/project/logs/debug.*.out
+```
+
+Expected output if pipeline is healthy:
+```
+GPU check:  NVIDIA L40  47.999... GB
+Building patches ...
+Debug training (1 GPU, 1000 iters) ...
+  iter      100 | loss 0.54321 | lr 1.00e-04 | ...
+  ...
+  iter     1000 | loss 0.38712 | ...
+Debug complete.
+```
+
+---
+
+## Step 6 — Submit the full training job
+
+```bash
+sbatch train.slurm
+```
+
+You'll receive:
+```
+Submitted batch job xyz
+```
+
+The Slurm script runs all 5 phases sequentially in one 72-hour job:
+- **Phase 1** — Build patch dataset (CPU, ~2–4h depending on data size)
+- **Phase 2** — Train Mode**********
+- **Phase 3** — Fine-tune Models 2–5 (2× L40, ~4× iterations each)
+- **Phase 4** — Train Models 6–9 from scratch (2× L40)
+- **Phase 5** — Evaluate all models, save CSV + plots
+
+---
+
+## Step 7 — Monitor training
+
+```bash
+# Check job status
+squeue -u $USER
+
+# Live log tail
+tail -f /scratch/lustre/users/$USER/project/logs/train.xyz.out
+
+# GPU utilisation (inside interactive job)
+srun --gres=gpu:1 --partition=gpu1 --time=00:10:00 --pty bash -i
+nvidia-smi -l 2
+
+# Memory usage report (KENET tool)
+jobmem
+```
+
+---
+
+## Step 8 — Run inference on .
+
+
+
+## Resource configuration rationale
+
+| Resource | Value | Reason |
+|---|---|---|
+| `--gres=gpu:2` | Both L40s | DDP doubles effective batch; halves wall time |
+| `--mem=300000` | 300 GB | Patch loading + DataLoader prefetch buffers |
+| `--cpus-per-task=48` | 48 cores | 16 DataLoader workers × 2 GPU processes + headroom |
+| `--time=72:00:00` | 72 h | Paper reports ~72h for 1M-iteration Model 1 |
+| `batch_size=64` | 32/GPU | Fills 48 GB L40 VRAM for 128px patches |
+| `workers=16` | 8/GPU | Keeps GPU feed-starved minimised |
+
+---
+
+## HPC best-practice checklist
+
+- ✅ All data and checkpoints on `/scratch/lustre/users/$USER/` (never `$HOME`)
+- ✅ Patch extraction done once and reused across all 9 models
+- ✅ Checkpoints saved every 10,000 iterations with 3-checkpoint rolling window
+- ✅ `torchrun --nproc_per_node=2` for DistributedDataParallel across both L40s
+- ✅ Mixed precision (AMP) via `GradScaler` for memory efficiency
+- ✅ `CosineAnnealingLR` scheduler across full 1M iterations
+- ✅ `jobmem` called at end of job to tune memory for future runs
+- ✅ Debug job validates full pipeline before committing to 72-hour run
+
+---
+
+## Expected results 
