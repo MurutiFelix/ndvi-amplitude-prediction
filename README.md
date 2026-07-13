@@ -14,13 +14,14 @@ Note: The Data folder isnt available online as its huge--details on how to get t
 │   ├── raw/                            # Dynamic spatiotemporal rasters (.tif) from MODIS & ERA5 (NDVI, LST, Precip), and population ratsers
 │   ├── static/                         # Landscape-invariant rasters (.tif) dictating constraints (TWI, Soil DSMW)
 │   └── processed/                      # Output matrix cache (tabular_dataset.csv, baseline scores, GLM regression reports)
-├── src/                               # MAIN SOURCE CODE CORE 
+├── src/                               # MAIN SOURCE CODE HERE 
 │   ├── config.yaml                     # Centralized pipeline configuration (hyperparameters, paths, random seeds, lags)
 │   ├── train.py                        # Root execution orchestrator that imports modules to run the entire end-to-end pipeline
 │   ├── logs/                           # Automated cluster logs directory (captures stdout/stderr from Slurm execution runs)
 │   ├── data/                           # Data Engineering
 │   │   ├── dataset.py                  # Custom PyTorch Dataset/Loader streaming architectures for neural network training
-│   │   └── raster_processor.py         # Heavy geospatial engine: handles raster alignment, coordinate mapping, and 3D-to-2D flattening
+│   │   ├── raster_processor.py         # Heavy geospatial engine: handles raster alignment, coordinate mapping, and 3D-to-2D flattening
+│   │   └── analyze_and_tune.py         #Baseline training orchestrator, feature importance extraction, spatial residual mapping, and HT
 │   ├── models/                         # ----
 │   │   ├── run_baselines.sh            # Slurm cluster shell script containing partition nodes, environments, and execution tasks
 │   │   ├── baselines.py                # Pipeline class containing cyclic time mapping, interaction features, and baseline models (XGB/RF)

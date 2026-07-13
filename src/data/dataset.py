@@ -1,176 +1,252 @@
 # src/data/dataset.py
-import glob
 import os
-import re
-import pandas as pd
 import numpy as np
-import rioxarray
-from scipy.ndimage import uniform_filter
-from tqdm import tqdm
-from src.data.raster_processor import align_raster
+import pandas as pd
+import torch
+from torch.utils.data import Dataset
+from sklearn.preprocessing import StandardScaler
 
-def build_tabular_dataset(config):
+
+class NDVIGraphDataset(Dataset):
     """
-    Compiles monthly spatial data into a unified 2D DataFrame
-    where all inputs are matched GeoTIFF raster layers.
+    PyTorch Dataset for spatiotemporal NDVI prediction using TSL graph models.
+
+    Converts the compiled tabular_dataset.csv into sliding window sequences
+    over the spatial graph of 159x181 pixels (28,779 nodes).
+
+    Input structure per sample:
+        x : [window_size, n_nodes, n_dynamic_features]  — dynamic feature sequence
+        u : [n_nodes, n_static_features]                — static features per node
+        y : [n_nodes, 1]                                — target log_ndvi at t+1
 
     Temporal logic:
-        - Target variable  : NDVI at time t
-        - Dynamic drivers  : LST and Precipitation at t-1, t-2, t-3 (3-month lag memory)
-        - Spatial lag      : 3x3 neighbourhood mean of NDVI at t-1
-        - Annual driver    : Population Density for the year of t (dynamic, annual)
-        - Static variables : TWI and Soil (time-invariant landscape properties)
+        - Window of 12 consecutive months as input sequence
+        - Target is log_ndvi at the month immediately following the window
+        - Chronological split: train ≤ 2021, test > 2021
 
-    Performance:
-        - Pixel-level iteration replaced with fully vectorized NumPy masking.
-        - Each timestep produces a DataFrame block; all blocks concatenated once.
+    Dynamic features (per timestep):
+        log_ndvi, lst_driver_lag1/2/3,
+        log_precip_driver_lag1/2/3, ndvi_spatial_lag,
+        pop_density  → 10 channels
+
+    Static features (per node, time-invariant):
+        twi, soil_snum (one-hot expanded) → varies by soil classes
     """
-    raw_dir       = config['paths']['raw_dir']
-    template_path = config['paths']['ndvi_template']
 
-    # --- Load static landscape variables once — shared across all timesteps
-    
-    print("Loading static landscape variables (TWI and Soil)...")
-    twi_flat  = rioxarray.open_rasterio(config['paths']['twi']).squeeze().values.flatten()
-    soil_flat = rioxarray.open_rasterio(config['paths']['soil_raster']).squeeze().values.flatten()
+    DYNAMIC_COLS = [
+        'log_ndvi',
+        'lst_driver_lag1', 'lst_driver_lag2', 'lst_driver_lag3',
+        'log_precip_driver_lag1', 'log_precip_driver_lag2', 'log_precip_driver_lag3',
+        'ndvi_spatial_lag',
+        'pop_density',
+    ]
 
-    # Gather and sort all monthly raster file lists
-    
-    ndvi_files   = sorted(glob.glob(os.path.join(raw_dir, "NDVI_*.tif")))
-    lst_files    = sorted(glob.glob(os.path.join(raw_dir, "LST_*.tif")))
-    precip_files = sorted(glob.glob(os.path.join(raw_dir, "precipitation_*.tif")))
+    STATIC_COLS_RAW = ['twi', 'soil_snum']
 
-    if not (len(ndvi_files) == len(lst_files) == len(precip_files)):
-        print(
-            f"Warning: Temporal asset count mismatch! "
-            f"NDVI: {len(ndvi_files)}, LST: {len(lst_files)}, "
-            f"Precip: {len(precip_files)}"
-        )
+    def __init__(
+        self,
+        csv_path   : str,
+        height     : int  = 159,
+        width      : int  = 181,
+        window_size: int  = 12,
+        split      : str  = 'train',
+        split_year : int  = 2021,
+        scaler     : StandardScaler = None,
+    ):
+        """
+        Args:
+            csv_path    : Path to tabular_dataset.csv
+            height      : Raster grid height (159)
+            width       : Raster grid width (181)
+            window_size : Number of input timesteps (12 months)
+            split       : 'train' or 'test'
+            split_year  : Year boundary for chronological split
+            scaler      : Fitted StandardScaler (pass train scaler to test set)
+        """
+        self.height      = height
+        self.width       = width
+        self.n_nodes     = height * width
+        self.window_size = window_size
+        self.split       = split
+        self.split_year  = split_year
 
-    
-    # Temporal loop — index starts at 3 to allow t-1, t-2, t-3 lags
-   
-    all_rows = []
+        print(f"Loading dataset from {csv_path}...")
+        df = pd.read_csv(csv_path)
 
-    print("Compiling space-time matrix with vectorized pixel masking...")
-    for i in tqdm(range(3, len(ndvi_files)), desc="Compiling Timesteps"):
+        # --- One-hot encode soil ---
+        df = pd.get_dummies(df, columns=['soil_snum'], drop_first=True)
+        soil_cols = [c for c in df.columns if c.startswith('soil_snum_')]
+        self.static_cols = ['twi'] + soil_cols
 
-        # --- Parse year and month from NDVI filename ---
-        ndvi_filename = os.path.basename(ndvi_files[i])
-        match = re.search(r"(\d{4})_(\d{2})", ndvi_filename)
-        if not match:
-            continue
+        # --- Sort chronologically ---
+        df = df.sort_values(['year', 'month']).reset_index(drop=True)
 
-        year  = int(match.group(1))
-        month = int(match.group(2))
+        # --- Get unique timesteps ---
+        timesteps = df[['year', 'month']].drop_duplicates().sort_values(
+            ['year', 'month']
+        ).reset_index(drop=True)
+        self.timesteps = timesteps
 
-        # --- Read target NDVI at time t (keep 2D for spatial lag) ---
-        ndvi_t_2d = rioxarray.open_rasterio(ndvi_files[i]).squeeze().values
+        # --- Build 3D spatial arrays: [T, H*W, F] ---
+        print("Pivoting tabular data to spatial grid format...")
+        T = len(timesteps)
+        n_dynamic = len(self.DYNAMIC_COLS)
+        n_static  = len(self.static_cols)
 
-        # --- Spatial lag: 3x3 neighbourhood mean of NDVI at t-1 ---
-        ndvi_prev_2d = rioxarray.open_rasterio(ndvi_files[i - 1]).squeeze().values
-        ndvi_spatial_lag_2d = uniform_filter(
-            np.where(ndvi_prev_2d > 0, ndvi_prev_2d, np.nan),
-            size=3,
-            mode='nearest'
-        )
+        dynamic_array = np.full((T, self.n_nodes, n_dynamic), np.nan, dtype=np.float32)
+        static_array  = np.full((self.n_nodes, n_static),     np.nan, dtype=np.float32)
+        static_filled = False
 
-        # Flatten both for tabular structure
-        ndvi_t           = ndvi_t_2d.flatten()
-        ndvi_spatial_lag = ndvi_spatial_lag_2d.flatten()
+        for t_idx, (_, row) in enumerate(timesteps.iterrows()):
+            mask = (df['year'] == row['year']) & (df['month'] == row['month'])
+            sub  = df[mask]
 
-        # --- Read dynamic drivers at t-1, t-2, t-3 lags ---
-        lst_minus1 = align_raster(lst_files[i - 1], template_path).values.flatten()
-        lst_minus2 = align_raster(lst_files[i - 2], template_path).values.flatten()
-        lst_minus3 = align_raster(lst_files[i - 3], template_path).values.flatten()
+            if len(sub) == 0:
+                continue
 
-        precip_minus1 = align_raster(precip_files[i - 1], template_path).values.flatten()
-        precip_minus2 = align_raster(precip_files[i - 2], template_path).values.flatten()
-        precip_minus3 = align_raster(precip_files[i - 3], template_path).values.flatten()
+            # Pixel index within flattened grid — positional order from dataset
+            pixel_indices = sub.index % self.n_nodes
 
-        # Guard against GEE background/negative NoData in precipitation
-        precip_minus1 = np.where(precip_minus1 < 0, np.nan, precip_minus1)
-        precip_minus2 = np.where(precip_minus2 < 0, np.nan, precip_minus2)
-        precip_minus3 = np.where(precip_minus3 < 0, np.nan, precip_minus3)
+            for f_idx, col in enumerate(self.DYNAMIC_COLS):
+                if col in sub.columns:
+                    dynamic_array[t_idx, pixel_indices, f_idx] = sub[col].values.astype(np.float32)
 
-        # --- Load annual population density dynamically for target year ---
-        pop_path = os.path.join(raw_dir, f"Pop_Density_{year}.tif")
-        if os.path.exists(pop_path):
-            pop_flat = align_raster(pop_path, template_path).values.flatten()
+            if not static_filled:
+                for f_idx, col in enumerate(self.static_cols):
+                    if col in sub.columns:
+                        static_array[pixel_indices, f_idx] = sub[col].values.astype(np.float32)
+                static_filled = True
+
+        # --- Chronological split on timestep indices ---
+        train_mask = (timesteps['year'] <= split_year).values
+        test_mask  = (timesteps['year'] >  split_year).values
+
+        if split == 'train':
+            valid_t = np.where(train_mask)[0]
         else:
-            print(f"  Warning: Pop_Density_{year}.tif not found — filling with NaN.")
-            pop_flat = np.full_like(ndvi_t, np.nan, dtype=np.float64)
+            valid_t = np.where(test_mask)[0]
 
-        # ---log transforms (vectorized, NaN-preserving) ---
-        log_ndvi = np.where(
-            (ndvi_t > 0) & ~np.isnan(ndvi_t),
-            np.log(ndvi_t),
-            np.nan
+        # --- Build sliding windows ---
+        # Each sample: window_size input steps + 1 target step
+        # Target must be within valid split range
+        self.windows = []
+        all_t = np.arange(T)
+
+        for t in valid_t:
+            # Need window_size steps before t, and t itself as target
+            start = t - window_size
+            if start < 0:
+                continue
+            # All window steps must exist (no gap checking for now)
+            self.windows.append((start, t))
+
+        print(f"  Split '{split}': {len(self.windows)} windows "
+              f"from {len(valid_t)} valid timesteps")
+
+        # --- Normalize dynamic features ---
+        # Fit scaler on train dynamic data only
+        train_t_indices = np.where(train_mask)[0]
+        train_dynamic   = dynamic_array[train_t_indices]  # [T_train, N, F]
+
+        # Reshape to [T_train * N, F] for scaler, fit on non-NaN values
+        flat_train = train_dynamic.reshape(-1, n_dynamic)
+        valid_rows = ~np.isnan(flat_train).any(axis=1)
+
+        if scaler is None:
+            self.scaler = StandardScaler()
+            self.scaler.fit(flat_train[valid_rows])
+        else:
+            self.scaler = scaler
+
+        # Apply scaler to all timesteps
+        flat_all   = dynamic_array.reshape(-1, n_dynamic)
+        valid_all  = ~np.isnan(flat_all).any(axis=1)
+        flat_scaled = flat_all.copy()
+        flat_scaled[valid_all] = self.scaler.transform(flat_all[valid_all]).astype(np.float32)
+        self.dynamic_array = flat_scaled.reshape(T, self.n_nodes, n_dynamic)
+
+        # --- Normalize static features ---
+        static_scaler  = StandardScaler()
+        valid_static   = ~np.isnan(static_array).any(axis=1)
+        static_scaled  = static_array.copy()
+        static_scaled[valid_static] = static_scaler.fit_transform(
+            static_array[valid_static]
+        ).astype(np.float32)
+        self.static_array = static_scaled
+
+        # Replace remaining NaNs with 0 (masked pixels)
+        self.dynamic_array = np.nan_to_num(self.dynamic_array, nan=0.0)
+        self.static_array  = np.nan_to_num(self.static_array,  nan=0.0)
+
+        self.n_dynamic_features = n_dynamic
+        self.n_static_features  = n_static
+
+        print(f"  Dynamic features : {n_dynamic}")
+        print(f"  Static features  : {n_static}")
+        print(f"  Nodes            : {self.n_nodes:,}")
+        print(f"  Window size      : {window_size} months")
+
+    def __len__(self):
+        return len(self.windows)
+
+    def __getitem__(self, idx):
+        start, t = self.windows[idx]
+
+        # Input sequence: [window_size, n_nodes, n_dynamic_features]
+        x = torch.tensor(
+            self.dynamic_array[start:t],
+            dtype=torch.float32
         )
-        log_precip_1 = np.where(
-            (precip_minus1 >= 0) & ~np.isnan(precip_minus1),
-            np.log(precip_minus1 + 1),
-            np.nan
-        )
-        log_precip_2 = np.where(
-            (precip_minus2 >= 0) & ~np.isnan(precip_minus2),
-            np.log(precip_minus2 + 1),
-            np.nan
-        )
-        log_precip_3 = np.where(
-            (precip_minus3 >= 0) & ~np.isnan(precip_minus3),
-            np.log(precip_minus3 + 1),
-            np.nan
+
+        # Static features: [n_nodes, n_static_features]
+        u = torch.tensor(
+            self.static_array,
+            dtype=torch.float32
         )
 
-        # --- Vectorized validity mask across ALL variables simultaneously ---
-        valid = (
-            (ndvi_t > 0)             & ~np.isnan(ndvi_t)       &
-            ~np.isnan(lst_minus1)                               &
-            ~np.isnan(lst_minus2)                               &
-            ~np.isnan(lst_minus3)                               &
-            ~np.isnan(precip_minus1)                            &
-            ~np.isnan(precip_minus2)                            &
-            ~np.isnan(precip_minus3)                            &
-            ~np.isnan(ndvi_spatial_lag)                         &
-            ~np.isnan(twi_flat)                                 &
-            ~np.isnan(soil_flat)                                &
-            ~np.isnan(pop_flat)
+        # Target: log_ndvi at timestep t — feature index 0
+        y = torch.tensor(
+            self.dynamic_array[t, :, 0:1],  # [n_nodes, 1]
+            dtype=torch.float32
         )
 
-        n_valid = valid.sum()
-        if n_valid == 0:
-            print(f"  Warning: No valid pixels for {year}-{month:02d}. Skipping.")
-            continue
+        return x, u, y
 
-        # --- Build timestep block directly from masked arrays ---
-        block = pd.DataFrame({
-            'year'                   : np.full(n_valid, year,  dtype=np.int32),
-            'month'                  : np.full(n_valid, month, dtype=np.int32),
-            'log_ndvi'               : log_ndvi[valid],
-            'lst_driver_lag1'        : lst_minus1[valid],
-            'lst_driver_lag2'        : lst_minus2[valid],
-            'lst_driver_lag3'        : lst_minus3[valid],
-            'log_precip_driver_lag1' : log_precip_1[valid],
-            'log_precip_driver_lag2' : log_precip_2[valid],
-            'log_precip_driver_lag3' : log_precip_3[valid],
-            'ndvi_spatial_lag'       : ndvi_spatial_lag[valid],
-            'pop_density'            : pop_flat[valid],
-            'twi'                    : twi_flat[valid],
-            'soil_snum'              : soil_flat[valid],
-        })
 
-        all_rows.append(block)
+def build_datasets(config, window_size=12):
+    """
+    Convenience function to build train and test datasets,
+    sharing the same scaler fitted on training data.
 
-    
-    # Single concatenation of all timestep blocks
-    
-    if not all_rows:
-        print("[ERROR]: No valid data blocks compiled. Check raster spatial intersections.")
-        return pd.DataFrame()
+    Args:
+        config      : Loaded config.yaml dict
+        window_size : Lookback window in months (default: 12)
 
-    print(f"\nConcatenating {len(all_rows)} timestep blocks...")
-    df = pd.concat(all_rows, ignore_index=True)
-    print(f"Final dataset shape: {df.shape[0]:,} rows × {df.shape[1]} columns")
+    Returns:
+        train_dataset, test_dataset
+    """
+    csv_path   = os.path.join(config['paths']['processed_dir'], "tabular_dataset.csv")
+    split_year = config['features']['train_split_year']
+    height     = config['spatial']['height']
+    width      = config['spatial']['width']
 
-    return df
+    train_dataset = NDVIGraphDataset(
+        csv_path    = csv_path,
+        height      = height,
+        width       = width,
+        window_size = window_size,
+        split       = 'train',
+        split_year  = split_year,
+    )
+
+    test_dataset = NDVIGraphDataset(
+        csv_path    = csv_path,
+        height      = height,
+        width       = width,
+        window_size = window_size,
+        split       = 'test',
+        split_year  = split_year,
+        scaler      = train_dataset.scaler,   # share fitted scaler
+    )
+
+    return train_dataset, test_dataset
