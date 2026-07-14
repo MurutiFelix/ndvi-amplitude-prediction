@@ -11,6 +11,14 @@ Trains 4 TSL graph models sequentially:
 Each model is trained on the same train/test split,
 evaluated on the same test set, and results saved to
 data/processed/dl_metrics.csv for comparison with baselines.
+
+Usage:
+    python -m src.models.train
+
+Output:
+    data/processed/checkpoint_{model}.pt
+    data/processed/history_{model}.csv
+    data/processed/dl_metrics.csv
 """
 
 import os
@@ -26,7 +34,6 @@ from sklearn.metrics import r2_score, mean_squared_error
 from src.data.dataset import NDVIGraphDataset, build_datasets
 from src.models.spatio_temporal import get_model, MODEL_REGISTRY
 from src.utils.spatial import get_edge_index
-
 
 # ------------------------------------------------------------------
 # Configuration
@@ -46,10 +53,30 @@ DEVICE        = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # ------------------------------------------------------------------
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
-    """Compute R² and RMSE."""
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    r2   = r2_score(y_true, y_pred)
+    """Compute R² and RMSE while ignoring missing/masked values safely."""
+    valid = ~np.isnan(y_true) & ~np.isnan(y_pred)
+    if valid.sum() == 0:
+        return {'R2_Score': 0.0, 'RMSE': 1e6}
+    rmse = np.sqrt(mean_squared_error(y_true[valid], y_pred[valid]))
+    r2   = r2_score(y_true[valid], y_pred[valid])
     return {'R2_Score': r2, 'RMSE': rmse}
+
+
+def forward_pass(model, x, u, ei, model_name):
+    """Execute forward pass conforming exactly to TSL signatures."""
+    if model_name == 'STID':
+        # STID expects forward(x, u=None). Bypassing continuous features.
+        out = model(x, u=None)
+    elif model_name in ('DCRNN', 'GRUGCNModel', 'GraphWaveNet'):
+        # Pass exogenous features using the explicit parameter name 'u'
+        out = model(x, edge_index=ei, u=u)
+    else:
+        out = model(x, edge_index=ei)
+    
+    # Standardize output to match target: [Batch, Nodes, 1]
+    if out.dim() == 4:
+        out = out[:, 0, :, :]  # Isolate horizon step 0 -> [B, N, F]
+    return out
 
 
 def train_one_epoch(model, loader, optimizer, criterion,
@@ -59,30 +86,13 @@ def train_one_epoch(model, loader, optimizer, criterion,
     total_loss = 0.0
 
     for x, u, y in loader:
-        # x : [B, T, N, F_dynamic]
-        # u : [B, N, F_static]
-        # y : [B, N, 1]
         x = x.to(DEVICE)
         u = u.to(DEVICE)
         y = y.to(DEVICE)
         ei = edge_index.to(DEVICE)
 
         optimizer.zero_grad()
-
-        # Forward pass — different models have different signatures
-        if model_name == 'STID':
-            out = model(x)
-        elif model_name in ('DCRNN', 'GRUGCNModel'):
-            out = model(x, edge_index=ei, u=u)
-        elif model_name == 'GraphWaveNet':
-            out = model(x, edge_index=ei, u=u)
-        else:
-            out = model(x, edge_index=ei)
-
-        # out shape: [B, horizon, N, output_size] or [B, N, output_size]
-        # Squeeze to [B, N, 1] for loss
-        if out.dim() == 4:
-            out = out[:, 0, :, :]   # take horizon step 0
+        out = forward_pass(model, x, u, ei, model_name)
 
         loss = criterion(out, y)
         loss.backward()
@@ -110,18 +120,7 @@ def evaluate(model, loader, criterion, edge_index, model_name):
         y  = y.to(DEVICE)
         ei = edge_index.to(DEVICE)
 
-        if model_name == 'STID':
-            out = model(x)
-        elif model_name in ('DCRNN', 'GRUGCNModel'):
-            out = model(x, edge_index=ei, u=u)
-        elif model_name == 'GraphWaveNet':
-            out = model(x, edge_index=ei, u=u)
-        else:
-            out = model(x, edge_index=ei)
-
-        if out.dim() == 4:
-            out = out[:, 0, :, :]
-
+        out = forward_pass(model, x, u, ei, model_name)
         loss = criterion(out, y)
         total_loss += loss.item()
 
@@ -143,19 +142,7 @@ def evaluate(model, loader, criterion, edge_index, model_name):
 
 def train_model(model_name, train_dataset, test_dataset,
                 edge_index, config):
-    """
-    Full training loop for a single model.
-
-    Args:
-        model_name    : Key from MODEL_REGISTRY
-        train_dataset : NDVIGraphDataset (train split)
-        test_dataset  : NDVIGraphDataset (test split)
-        edge_index    : [2, E] graph connectivity tensor
-        config        : Loaded config.yaml dict
-
-    Returns:
-        best_metrics (dict): R2_Score and RMSE on test set at best epoch
-    """
+    """Full training loop for a single model."""
     print(f"\n{'='*60}")
     print(f"  Training: {model_name}")
     print(f"{'='*60}")
@@ -273,10 +260,6 @@ def train_model(model_name, train_dataset, test_dataset,
     return best_metrics
 
 
-# ------------------------------------------------------------------
-# Entry point
-# ------------------------------------------------------------------
-
 def main():
     # --- Load config ---
     with open("src/config.yaml", "r") as f:
@@ -285,11 +268,8 @@ def main():
     os.makedirs(config['paths']['processed_dir'], exist_ok=True)
 
     print(f"Device: {DEVICE}")
-    if torch.cuda.is_available():
-        for i in range(torch.cuda.device_count()):
-            print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
 
-    # --- Build edge index (cached after first run) ---
+    # --- Build edge index ---
     cache_path = os.path.join(
         config['paths']['processed_dir'], "edge_index.pt"
     )
@@ -304,12 +284,7 @@ def main():
     print("\nBuilding train and test datasets...")
     train_dataset, test_dataset = build_datasets(config, window_size=WINDOW_SIZE)
 
-    print(f"\nTrain windows : {len(train_dataset):,}")
-    print(f"Test windows  : {len(test_dataset):,}")
-    print(f"Dynamic feats : {train_dataset.n_dynamic_features}")
-    print(f"Static feats  : {train_dataset.n_static_features}")
-
-    # --- Train all 4 models sequentially ---
+    # --- Train all models sequentially ---
     all_results = {}
 
     for model_name in MODEL_REGISTRY.keys():
@@ -322,7 +297,6 @@ def main():
                 config        = config,
             )
             all_results[model_name] = metrics
-
         except Exception as e:
             print(f"\n[ERROR] {model_name} failed: {e}")
             all_results[model_name] = {'R2_Score': None, 'RMSE': None}
@@ -335,15 +309,10 @@ def main():
     results_df = pd.DataFrame(all_results).T
     print(results_df.to_string())
 
-    # --- Save results ---
     results_path = os.path.join(
         config['paths']['processed_dir'], "dl_metrics.csv"
     )
     results_df.to_csv(results_path)
-    print(f"\nDL metrics saved to {results_path}")
-    print("\nBaseline benchmark for reference:")
-    print("  XGBoost R²=0.633 | RMSE=0.258")
-    print("  RandomForest R²=0.632 | RMSE=0.259")
 
 
 if __name__ == "__main__":

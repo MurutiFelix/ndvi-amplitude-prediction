@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=ndvi_dl
-#SBATCH --partition=normal
+#SBATCH --partition=gpulong
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=120000
 #SBATCH --gres=gpu:2
-#SBATCH --time=12:00:00
+#SBATCH --time=50:00:00
 #SBATCH --output=logs/dl_%j.out
 #SBATCH --error=logs/dl_%j.err
 

@@ -121,10 +121,7 @@ Submitted batch job xyz
 ```
 
 The Slurm script runs all 5 phases sequentially in one 72-hour job:
-- **Phase 1** — Build patch dataset (CPU, ~2–4h depending on data size)
-- **Phase 2** — Train Mode**********
-- **Phase 3** — Fine-tune Models 2–5 (2× L40, ~4× iterations each)
-- **Phase 4** — Train Models 6–9 from scratch (2× L40)
+
 - **Phase 5** — Evaluate all models, save CSV + plots
 
 ---
