@@ -61,7 +61,7 @@ Deep Learning: 4 state-of-the-art spatiotemporal models from TSL
 - GRUGCN (GRU + Graph Convolutional Network)
 - GraphWaveNet (Learned adjacency + dilated convolutions)
 
-## Spatial Graph Representation
+### Spatial Graph Representation
 Treats each pixel as a node in a graph (159×181 = 28,779 nodes)
 
 8-connectivity (queen contiguity) for spatial edges
