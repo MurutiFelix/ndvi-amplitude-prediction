@@ -1,6 +1,6 @@
 # A spatiotemporal deep learning framework for predicting vegetation dynamics using biophysical, edaphic, anthropogenic, and geomorphological parameters
 
-This project implements a comprehensive pipeline for predicting NDVI (Normalized Difference Vegetation Index) amplitude—a key indicator of vegetation productivity—using a multi-modal approach that integrates:
+This project implements a comprehensive pipeline for predicting NDVI (Normalized Difference Vegetation Index) amplitude - a key indicator of vegetation productivity - using a multi-modal approach that integrates:
 
 - Biophysical drivers: Land Surface Temperature (LST), Precipitation
 - Edaphic factors: Soil type, Topographic Wetness Index (TWI)
