@@ -2,19 +2,22 @@
 
 This project implements a comprehensive pipeline for predicting NDVI (Normalized Difference Vegetation Index) amplitude—a key indicator of vegetation productivity—using a multi-modal approach that integrates:
 
-Biophysical drivers: Land Surface Temperature (LST), Precipitation
-Edaphic factors: Soil type, Topographic Wetness Index (TWI)
-Anthropogenic influences: Population density
-Geomorphological constraints: Topography, drainage patterns
+- Biophysical drivers: Land Surface Temperature (LST), Precipitation
+- Edaphic factors: Soil type, Topographic Wetness Index (TWI)
+- Anthropogenic influences: Population density
+- Geomorphological constraints: Topography, drainage patterns
 
 The pipeline supports both traditional machine learning baselines (OLS, GLM, Random Forest, XGBoost) and deep learning models built on the Torch Spatiotemporal Library (TSL), including Graph Neural Networks (GNNs) for capturing complex spatial dependencies.
 
 This work is based on the methodology from:
 
 **Ma, Y., et al. (2022). "Forecasting vegetation dynamics in an open ecosystem by integrating deep learning and environmental variables."**
+
+
 ---
 
 ## Folder Structure
+
 Note: The Data folder isnt available online as its huge--details on how to get the datasets are provided
 
 ```
@@ -44,10 +47,10 @@ Note: The Data folder isnt available online as its huge--details on how to get t
 
 ```
 
-https://img.shields.io/badge/python-3.12-blue.svg
-https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg
-https://img.shields.io/badge/HPC-KENET-brightgreen.svg
-https://img.shields.io/badge/license-MIT-blue.svg
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
+[![HPC](https://img.shields.io/badge/HPC-KENET-brightgreen.svg)](https://kenet.or.ke/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ---
 Baselines: OLS, GLM, Random Forest, XGBoost (with hyperparameter tuning)
@@ -206,6 +209,7 @@ jobmem
 - ✅ `CosineAnnealingLR` scheduler across full 1M iterations
 - ✅ `jobmem` called at end of job to tune memory for future runs
 - ✅ Debug job validates full pipeline before committing to 72-hour run
+
 
 ---
 
