@@ -61,10 +61,14 @@ def build_tabular_dataset(config):
 
         ndvi_t_2d    = rioxarray.open_rasterio(ndvi_files[i]).squeeze().values
         ndvi_prev_2d = rioxarray.open_rasterio(ndvi_files[i - 1]).squeeze().values
-        ndvi_spatial_lag_2d = uniform_filter(
-            np.where(ndvi_prev_2d > 0, ndvi_prev_2d, np.nan),
-            size=3, mode='nearest'
-        )
+        # Replace invalid pixels with 0 before filtering to prevent NaN propagation
+        # then mask back to NaN where the original was invalid
+        ndvi_prev_valid = np.where(ndvi_prev_2d > 0, ndvi_prev_2d, 0.0)
+        ndvi_prev_mask  = (ndvi_prev_2d > 0).astype(np.float32)
+        ndvi_sum        = uniform_filter(ndvi_prev_valid, size=3, mode='nearest')
+        ndvi_cnt        = uniform_filter(ndvi_prev_mask,  size=3, mode='nearest')
+        # Avoid division by zero — pixels where no valid neighbour exists get NaN
+        ndvi_spatial_lag_2d = np.where(ndvi_cnt > 0, ndvi_sum / ndvi_cnt, np.nan)
         ndvi_t           = ndvi_t_2d.flatten()
         ndvi_spatial_lag = ndvi_spatial_lag_2d.flatten()
 
@@ -72,6 +76,11 @@ def build_tabular_dataset(config):
         lst_minus1 = align_raster(lst_files[i - 1], template_path).values.flatten()
         lst_minus2 = align_raster(lst_files[i - 2], template_path).values.flatten()
         lst_minus3 = align_raster(lst_files[i - 3], template_path).values.flatten()
+
+        # Mask GEE NoData sentinel (-9999) to NaN
+        lst_minus1 = np.where(lst_minus1 < -100, np.nan, lst_minus1)
+        lst_minus2 = np.where(lst_minus2 < -100, np.nan, lst_minus2)
+        lst_minus3 = np.where(lst_minus3 < -100, np.nan, lst_minus3)
 
         precip_minus1 = align_raster(precip_files[i - 1], template_path).values.flatten()
         precip_minus2 = align_raster(precip_files[i - 2], template_path).values.flatten()
@@ -81,9 +90,11 @@ def build_tabular_dataset(config):
             arr[:] = np.where(arr < 0, np.nan, arr)
 
         pop_path = os.path.join(raw_dir, f"Pop_Density_{year}.tif")
-        pop_flat = align_raster(pop_path, template_path).values.flatten() \
-            if os.path.exists(pop_path) \
-            else np.full_like(ndvi_t, np.nan, dtype=np.float64)
+        if os.path.exists(pop_path):
+            pop_flat = align_raster(pop_path, template_path).values.flatten()
+            pop_flat = np.where(pop_flat < 0, np.nan, pop_flat)
+        else:
+            pop_flat = np.full_like(ndvi_t, np.nan, dtype=np.float64)
 
         log_ndvi     = np.where((ndvi_t > 0) & ~np.isnan(ndvi_t), np.log(ndvi_t), np.nan)
         log_precip_1 = np.where((precip_minus1 >= 0) & ~np.isnan(precip_minus1), np.log(precip_minus1 + 1), np.nan)
@@ -314,14 +325,19 @@ def build_datasets(config, window_size=12):
     height     = config['spatial']['height']
     width      = config['spatial']['width']
 
-    # --- Auto-recompile if pixel_idx missing ---
-    if os.path.exists(csv_path):
+    # --- Compile CSV if missing or lacking pixel_idx ---
+    needs_compile = False
+    if not os.path.exists(csv_path):
+        print("tabular_dataset.csv not found — compiling from rasters...")
+        needs_compile = True
+    else:
         probe = pd.read_csv(csv_path, nrows=1)
         if 'pixel_idx' not in probe.columns:
             print("tabular_dataset.csv missing pixel_idx — recompiling...")
             os.remove(csv_path)
+            needs_compile = True
 
-    if not os.path.exists(csv_path):
+    if needs_compile:
         df = build_tabular_dataset(config)
         if df.empty:
             raise RuntimeError("Dataset compilation failed — check raster paths.")

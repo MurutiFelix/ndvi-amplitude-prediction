@@ -62,18 +62,52 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     return {'R2_Score': r2, 'RMSE': rmse}
 
 
+def prepare_tensors(x, u, y):
+    """
+    Ensures input tensors match TSL format: [Batch, Time, Nodes, Features]
+    Swaps axes if necessary, and projects 3D static features to 4D.
+    """
+    # 1. Align Dynamic Features: x
+    # Nodes (N ~ 28779) will be much larger than lookback Window (T = 12).
+    # Swap axes if index 1 (Nodes) is larger than index 2 (Time).
+    if x.dim() == 4 and x.shape[1] > x.shape[2]:
+        x = x.transpose(1, 2)
+
+    # 2. Align Static Exogenous Features: u
+    if u is not None:
+        if u.dim() == 3:
+            # Shape is [Batch, Nodes, Features] (static, no time dimension).
+            # Expand u over the Time dimension of x so shape becomes [Batch, Time, Nodes, Features]
+            u = u.unsqueeze(1)  # -> [Batch, 1, Nodes, Features]
+            u = u.expand(-1, x.shape[1], -1, -1)  # -> [Batch, Time, Nodes, Features]
+        elif u.dim() == 4 and u.shape[1] > u.shape[2]:
+            u = u.transpose(1, 2)
+
+    # 3. Align Targets: y to [Batch, Nodes, 1]
+    if y.dim() == 4:
+        if y.shape[1] > y.shape[2]:
+            y = y.transpose(1, 2)
+        y = y[:, -1, :, :]
+    elif y.dim() == 3:
+        if y.shape[1] > y.shape[2]:
+            y = y.transpose(1, 2)
+        y = y[:, -1, :].unsqueeze(-1)
+
+    return x, u, y
+
+
 def forward_pass(model, x, u, ei, model_name):
     """Execute forward pass conforming exactly to TSL signatures."""
     if model_name == 'STID':
-        # STID expects forward(x, u=None). Bypassing continuous features.
-        out = model(x, u=None)
+        # STID has no dynamic/static exog parameters in this TSL version
+        out = model(x)
     elif model_name in ('DCRNN', 'GRUGCNModel', 'GraphWaveNet'):
         # Pass exogenous features using the explicit parameter name 'u'
         out = model(x, edge_index=ei, u=u)
     else:
         out = model(x, edge_index=ei)
     
-    # Standardize output to match target: [Batch, Nodes, 1]
+    # Standardize output to match target shape: [Batch, Nodes, 1]
     if out.dim() == 4:
         out = out[:, 0, :, :]  # Isolate horizon step 0 -> [B, N, F]
     return out
@@ -86,6 +120,9 @@ def train_one_epoch(model, loader, optimizer, criterion,
     total_loss = 0.0
 
     for x, u, y in loader:
+        # Align dimensions to: [Batch, Time, Nodes, Features]
+        x, u, y = prepare_tensors(x, u, y)
+
         x = x.to(DEVICE)
         u = u.to(DEVICE)
         y = y.to(DEVICE)
@@ -115,6 +152,9 @@ def evaluate(model, loader, criterion, edge_index, model_name):
     all_true   = []
 
     for x, u, y in loader:
+        # Align dimensions to: [Batch, Time, Nodes, Features]
+        x, u, y = prepare_tensors(x, u, y)
+
         x  = x.to(DEVICE)
         u  = u.to(DEVICE)
         y  = y.to(DEVICE)
@@ -166,14 +206,14 @@ def train_model(model_name, train_dataset, test_dataset,
         batch_size  = BATCH_SIZE,
         shuffle     = False,   # must preserve temporal order
         num_workers = 4,
-        pin_memory  = True,
+        pin_memory  = (DEVICE.type == 'cuda'),  # only pin memory when GPU is present
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size  = BATCH_SIZE,
         shuffle     = False,
         num_workers = 4,
-        pin_memory  = True,
+        pin_memory  = (DEVICE.type == 'cuda'),
     )
 
     # --- Optimizer and loss ---
@@ -300,6 +340,8 @@ def main():
         except Exception as e:
             print(f"\n[ERROR] {model_name} failed: {e}")
             all_results[model_name] = {'R2_Score': None, 'RMSE': None}
+            import traceback
+            traceback.print_exc()
             continue
 
     # --- Final comparison table ---

@@ -34,46 +34,48 @@ def build_stid(n_nodes, n_dynamic, n_static, window_size):
     STIDModel — Spatial-Temporal Identity.
 
     Lightweight MLP-based model that uses spatial and temporal
-    identity embeddings. Fastest to train, good comparison floor.
-
-    Args:
-        n_nodes     : Number of graph nodes (28,779)
-        n_dynamic   : Number of dynamic input features (10)
-        n_static    : Number of static/exog features
-        window_size : Input sequence length (12)
-
-    Returns:
-        model (STIDModel)
+    identity embeddings. Fast to train, good comparison floor.
+    
+    Note: Safely patches a TSL library bug where STIDModel.__init__ 
+    crashes on reset_parameters() if exog_embs does not exist.
     """
-    return STIDModel(
-        input_size   = n_dynamic,
-        n_nodes      = n_nodes,
-        window       = window_size,
-        horizon      = 1,
-        output_size  = 1,
-        hidden_size  = 64,
-        n_layers     = 3,
-        dropout      = 0.15,
-    )
+    # 1. Temporarily patch the class's reset_parameters or assign an empty ModuleList
+    # to avoid the AttributeError: 'STIDModel' object has no attribute 'exog_embs'
+    original_init = STIDModel.__init__
+    
+    def patched_init(self, *args, **kwargs):
+        # We define exog_embs right before the original init finishes (or calls reset)
+        self.exog_embs = nn.ModuleList()
+        original_init(self, *args, **kwargs)
+
+    # Apply temporary hook to the class constructor to bypass the reset bug
+    STIDModel.__init__ = patched_init
+    
+    try:
+        model = STIDModel(
+            input_size   = n_dynamic,
+            n_nodes      = n_nodes,
+            window       = window_size,
+            horizon      = 1,
+            output_size  = 1,
+            hidden_size  = 64,
+            n_layers     = 3,
+            dropout      = 0.15,
+        )
+    finally:
+        # Restore original constructor to keep class behavior clean
+        STIDModel.__init__ = original_init
+
+    # Ensure the model object itself has the attribute configured
+    if not hasattr(model, 'exog_embs'):
+        model.exog_embs = nn.ModuleList()
+        
+    return model
 
 
 def build_dcrnn(n_nodes, n_dynamic, n_static, window_size):
     """
     DCRNNModel — Diffusion Convolutional Recurrent Neural Network.
-
-    Uses bidirectional graph diffusion convolutions inside RNN cells.
-    Captures multi-hop spatial propagation — well suited for
-    hydrology-driven vegetation dynamics where upstream conditions
-    propagate downstream across the basin.
-
-    Args:
-        n_nodes     : Number of graph nodes (28,779)
-        n_dynamic   : Number of dynamic input features (10)
-        n_static    : Number of static/exog features
-        window_size : Input sequence length (12)
-
-    Returns:
-        model (DCRNNModel)
     """
     return DCRNNModel(
         input_size  = n_dynamic,
@@ -91,22 +93,6 @@ def build_dcrnn(n_nodes, n_dynamic, n_static, window_size):
 def build_grugcn(n_nodes, n_dynamic, n_static, window_size):
     """
     GRUGCNModel — GRU Encoder + GCN Decoder (time-then-space).
-
-    GRU processes the 12-month temporal sequence per node,
-    producing a hidden state that summarises temporal dynamics.
-    GCN then decodes spatial structure across the graph.
-
-    This architecture directly mirrors the thesis framing:
-    temporal memory (GRU) feeding into spatial inference (GCN).
-
-    Args:
-        n_nodes     : Number of graph nodes (28,779)
-        n_dynamic   : Number of dynamic input features (10)
-        n_static    : Number of static/exog features
-        window_size : Input sequence length (12)
-
-    Returns:
-        model (GRUGCNModel)
     """
     return GRUGCNModel(
         input_size  = n_dynamic,
@@ -123,22 +109,6 @@ def build_grugcn(n_nodes, n_dynamic, n_static, window_size):
 def build_graphwavenet(n_nodes, n_dynamic, n_static, window_size):
     """
     GraphWaveNetModel — Learned Adjacency + Dilated Temporal Convolutions.
-
-    Learns spatial adjacency directly from data rather than assuming
-    fixed 8-neighbour structure. Discovers non-obvious spatial
-    relationships (e.g. distant pixels with correlated vegetation
-    driven by shared hydrological pathways).
-
-    Most powerful model — highest thesis contribution.
-
-    Args:
-        n_nodes     : Number of graph nodes (28,779)
-        n_dynamic   : Number of dynamic input features (10)
-        n_static    : Number of static/exog features
-        window_size : Input sequence length (12)
-
-    Returns:
-        model (GraphWaveNetModel)
     """
     return GraphWaveNetModel(
         input_size           = n_dynamic,
@@ -176,19 +146,6 @@ def get_model(name: str, n_nodes: int, n_dynamic: int,
               n_static: int, window_size: int) -> nn.Module:
     """
     Instantiate a model by name from the registry.
-
-    Args:
-        name        : One of ['STID', 'DCRNN', 'GRUGCNModel', 'GraphWaveNet']
-        n_nodes     : Number of spatial nodes
-        n_dynamic   : Number of dynamic input channels
-        n_static    : Number of static/exog channels
-        window_size : Input sequence length
-
-    Returns:
-        model (nn.Module)
-
-    Raises:
-        ValueError if name not in registry.
     """
     if name not in MODEL_REGISTRY:
         raise ValueError(
