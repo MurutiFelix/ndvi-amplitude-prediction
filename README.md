@@ -56,14 +56,11 @@ Note: The Data folder isnt available online as its huge--details on how to get t
 Baselines: OLS, GLM, Random Forest, XGBoost (with hyperparameter tuning)
 
 Deep Learning: 4 state-of-the-art spatiotemporal models from TSL
+- STID (Spatial-Temporal Identity)
+- DCRNN (Diffusion Convolutional RNN)
+- GRUGCN (GRU + Graph Convolutional Network)
+- GraphWaveNet (Learned adjacency + dilated convolutions)
 
-STID (Spatial-Temporal Identity)
-
-DCRNN (Diffusion Convolutional RNN)
-
-GRUGCN (GRU + Graph Convolutional Network)
-
-GraphWaveNet (Learned adjacency + dilated convolutions)
 ## Spatial Graph Representation
 Treats each pixel as a node in a graph (159×181 = 28,779 nodes)
 
