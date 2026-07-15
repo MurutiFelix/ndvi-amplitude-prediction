@@ -63,10 +63,8 @@ Deep Learning: 4 state-of-the-art spatiotemporal models from TSL
 
 ### Spatial Graph Representation
 Treats each pixel as a node in a graph (159×181 = 28,779 nodes)
-
-8-connectivity (queen contiguity) for spatial edges
-
-Enables models to learn spatial dependencies and propagation patterns
+8-connectivity (queen contiguity) for spatial edges.
+Enables models to learn spatial dependencies and propagation patterns.
 
 ## Step 1 — Clone to scratch 
 
