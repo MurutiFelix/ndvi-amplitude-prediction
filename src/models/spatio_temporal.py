@@ -158,3 +158,5 @@ def get_model(name: str, n_nodes: int, n_dynamic: int,
     print(f"Built {name}: {n_params:,} trainable parameters")
 
     return model
+
+# not uploaded to hpc

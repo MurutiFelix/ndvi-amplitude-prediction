@@ -1,8 +1,17 @@
-# A mini project based on the paper "Forecasting vegetation dynamics in an open ecosystem by integrating deep learning and environmental variables "  
+# A spatiotemporal deep learning framework for predicting vegetation dynamics using biophysical, edaphic, anthropogenic, and geomorphological parameters
 
-**Paper:** Yue Ma et.al,(2022) — ndvi-amplitude-prediction: A torch spatio-temporal models comparison
-**Task:**  forecast vegetation state (predict ndvi)
-**Hardware target:** KENET HPC — 2× NVIDIA L40 (48 GB each), 96 cores, 355 GB RAM per node
+This project implements a comprehensive pipeline for predicting NDVI (Normalized Difference Vegetation Index) amplitude—a key indicator of vegetation productivity—using a multi-modal approach that integrates:
+
+Biophysical drivers: Land Surface Temperature (LST), Precipitation
+Edaphic factors: Soil type, Topographic Wetness Index (TWI)
+Anthropogenic influences: Population density
+Geomorphological constraints: Topography, drainage patterns
+
+The pipeline supports both traditional machine learning baselines (OLS, GLM, Random Forest, XGBoost) and deep learning models built on the Torch Spatiotemporal Library (TSL), including Graph Neural Networks (GNNs) for capturing complex spatial dependencies.
+
+This work is based on the methodology from:
+
+**Ma, Y., et al. (2022). "Forecasting vegetation dynamics in an open ecosystem by integrating deep learning and environmental variables."**
 ---
 
 ## Folder Structure
@@ -34,6 +43,31 @@ Note: The Data folder isnt available online as its huge--details on how to get t
 └── requirements.txt                   # Project environment dependencies lockfile    
 
 ```
+
+https://img.shields.io/badge/python-3.12-blue.svg
+https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg
+https://img.shields.io/badge/HPC-KENET-brightgreen.svg
+https://img.shields.io/badge/license-MIT-blue.svg
+
+---
+Baselines: OLS, GLM, Random Forest, XGBoost (with hyperparameter tuning)
+
+Deep Learning: 4 state-of-the-art spatiotemporal models from TSL
+
+STID (Spatial-Temporal Identity)
+
+DCRNN (Diffusion Convolutional RNN)
+
+GRUGCN (GRU + Graph Convolutional Network)
+
+GraphWaveNet (Learned adjacency + dilated convolutions)
+## Spatial Graph Representation
+Treats each pixel as a node in a graph (159×181 = 28,779 nodes)
+
+8-connectivity (queen contiguity) for spatial edges
+
+Enables models to learn spatial dependencies and propagation patterns
+
 ## Step 1 — Clone to scratch 
 
 ```bash
