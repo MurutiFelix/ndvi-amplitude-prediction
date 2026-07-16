@@ -36,20 +36,20 @@ def build_stid(n_nodes, n_dynamic, n_static, window_size):
     Lightweight MLP-based model that uses spatial and temporal
     identity embeddings. Fast to train, good comparison floor.
     
-    Note: Safely patches a TSL library bug where STIDModel.__init__ 
-    crashes on reset_parameters() if exog_embs does not exist.
+    Note: Safely patches a TSL library bug where STIDModel.reset_parameters()
+    crashes looking for 'exog_embs' before it is initialized.
     """
-    # 1. Temporarily patch the class's reset_parameters or assign an empty ModuleList
-    # to avoid the AttributeError: 'STIDModel' object has no attribute 'exog_embs'
-    original_init = STIDModel.__init__
+    # Grab the original reset_parameters function
+    original_reset = STIDModel.reset_parameters
     
-    def patched_init(self, *args, **kwargs):
-        # We define exog_embs right before the original init finishes (or calls reset)
-        self.exog_embs = nn.ModuleList()
-        original_init(self, *args, **kwargs)
+    # Intercept the reset call and set exog_embs after PyTorch setup is complete
+    def patched_reset(self, *args, **kwargs):
+        if not hasattr(self, 'exog_embs'):
+            self.exog_embs = nn.ModuleList()
+        return original_reset(self, *args, **kwargs)
 
-    # Apply temporary hook to the class constructor to bypass the reset bug
-    STIDModel.__init__ = patched_init
+    # Apply the runtime patch
+    STIDModel.reset_parameters = patched_reset
     
     try:
         model = STIDModel(
@@ -63,10 +63,10 @@ def build_stid(n_nodes, n_dynamic, n_static, window_size):
             dropout      = 0.15,
         )
     finally:
-        # Restore original constructor to keep class behavior clean
-        STIDModel.__init__ = original_init
+        # Restore original class method to keep clean behavior
+        STIDModel.reset_parameters = original_reset
 
-    # Ensure the model object itself has the attribute configured
+    # Double check attribute assignment on final instance
     if not hasattr(model, 'exog_embs'):
         model.exog_embs = nn.ModuleList()
         
@@ -158,5 +158,3 @@ def get_model(name: str, n_nodes: int, n_dynamic: int,
     print(f"Built {name}: {n_params:,} trainable parameters")
 
     return model
-
-# not uploaded to hpc
