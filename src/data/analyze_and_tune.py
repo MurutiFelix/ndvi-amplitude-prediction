@@ -1,6 +1,7 @@
 # src/data/analyze_and_tune.py
 import os
 import yaml
+import csv
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -85,11 +86,22 @@ def main():
         'XGBoost_pred'  : xgb_preds
     })
     
-    error_diagnostics.to_csv(
-        os.path.join(config['paths']['processed_dir'], "test_residuals_dataframe.csv"),
-        index=False
-    )
-    print(f"Residual analysis saved. Test set Mean Absolute Errors (MAE):")
+    # Lustre Filesystem Safe Export: write chunks using standard Python csv module
+    output_path = os.path.join(config['paths']['processed_dir'], "test_residuals_dataframe.csv")
+    print(f"Writing multi-model predictions safely to {output_path}...")
+    
+    with open(output_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        # Write the header
+        writer.writerow(error_diagnostics.columns)
+        
+        # Stream the data in chunks of 100k rows using python's buffered writer
+        chunk_size = 100000
+        for i in range(0, len(error_diagnostics), chunk_size):
+            chunk = error_diagnostics.iloc[i : i + chunk_size].values
+            writer.writerows(chunk)
+
+    print(f"Residual analysis saved successfully. Test set Mean Absolute Errors (MAE):")
     print(f"  OLS MAE:     {np.abs(y_test.values - ols_preds).mean():.5f}")
     print(f"  GLM MAE:     {np.abs(y_test.values - glm_preds).mean():.5f}")
     print(f"  RF MAE:      {np.abs(y_test.values - rf_preds).mean():.5f}")
