@@ -4,6 +4,7 @@ import yaml
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+import statsmodels.api as sm
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 from src.models.baselines import NDVIBaselines
 
@@ -63,21 +64,36 @@ def main():
     )
     print("Top 10 XGBoost Features:\n", xgb_fi.head(10))
 
-    # --- Residual analysis for spatial mapping ---
-    print("\nComputing test set residuals for spatial mapping error analysis...")
+    # --- Multi-Model Prediction and Residual Extraction ---
+    print("\nComputing test set predictions for all baseline models...")
+    
+    # Generate predictions for Scikit-Learn / XGBoost models
+    ols_preds = evaluator.models["OLS"].predict(X_test)
+    rf_preds  = evaluator.models["RandomForest"].predict(X_test)
     xgb_preds = xgb_model.predict(X_test)
-    residuals  = y_test - xgb_preds
-
+    
+    # Generate predictions for statsmodels GLM (requires prepended intercept constant)
+    X_test_const = sm.add_constant(X_test, has_constant='add')
+    glm_preds = evaluator.glm_results.predict(X_test_const)
+    
+    # Create the multi-model diagnostics DataFrame
     error_diagnostics = pd.DataFrame({
         'true_log_ndvi' : y_test.values,
-        'pred_log_ndvi' : xgb_preds,
-        'residual'      : residuals.values
+        'OLS_pred'      : ols_preds,
+        'GLM_pred'      : glm_preds,
+        'RF_pred'       : rf_preds,
+        'XGBoost_pred'  : xgb_preds
     })
+    
     error_diagnostics.to_csv(
         os.path.join(config['paths']['processed_dir'], "test_residuals_dataframe.csv"),
         index=False
     )
-    print(f"Residual analysis saved. Mean Absolute Error: {np.abs(residuals).mean():.5f}")
+    print(f"Residual analysis saved. Test set Mean Absolute Errors (MAE):")
+    print(f"  OLS MAE:     {np.abs(y_test.values - ols_preds).mean():.5f}")
+    print(f"  GLM MAE:     {np.abs(y_test.values - glm_preds).mean():.5f}")
+    print(f"  RF MAE:      {np.abs(y_test.values - rf_preds).mean():.5f}")
+    print(f"  XGBoost MAE: {np.abs(y_test.values - xgb_preds).mean():.5f}")
 
     # --- XGBoost hyperparameter tuning with chronologically safe CV ---
     print("\nInitializing hyperparameter tuning sweep on XGBoost matrix...")
