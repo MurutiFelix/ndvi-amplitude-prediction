@@ -18,8 +18,8 @@ This work is based on the methodology from:
 
 ## Folder Structure
 
-> \[!NOTE] The Data folder isnt available online as its huge--details on how to get the datasets are provided
-> 
+> \[!NOTE] 
+> * The Data folder isnt available online as its huge--details on how to get the datasets are provided
 ```
 
 ├── data/                              # ALL EXPERIMENT DATA MODALITIES 
