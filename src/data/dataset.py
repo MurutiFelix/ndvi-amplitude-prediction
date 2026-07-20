@@ -17,10 +17,6 @@ from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
-# ------------------------------------------------------------------ #
-#  Raster compiler  (writes pixel_idx so spatial placement is exact)  #
-# ------------------------------------------------------------------ #
-
 def align_raster(raster_path, template_path):
     from src.data.raster_processor import align_raster as _align
     return _align(raster_path, template_path)
@@ -61,18 +57,19 @@ def build_tabular_dataset(config):
 
         ndvi_t_2d    = rioxarray.open_rasterio(ndvi_files[i]).squeeze().values
         ndvi_prev_2d = rioxarray.open_rasterio(ndvi_files[i - 1]).squeeze().values
+        
         # Replace invalid pixels with 0 before filtering to prevent NaN propagation
         # then mask back to NaN where the original was invalid
         ndvi_prev_valid = np.where(ndvi_prev_2d > 0, ndvi_prev_2d, 0.0)
         ndvi_prev_mask  = (ndvi_prev_2d > 0).astype(np.float32)
         ndvi_sum        = uniform_filter(ndvi_prev_valid, size=3, mode='nearest')
         ndvi_cnt        = uniform_filter(ndvi_prev_mask,  size=3, mode='nearest')
+        
         # Avoid division by zero — pixels where no valid neighbour exists get NaN
         ndvi_spatial_lag_2d = np.where(ndvi_cnt > 0, ndvi_sum / ndvi_cnt, np.nan)
         ndvi_t           = ndvi_t_2d.flatten()
         ndvi_spatial_lag = ndvi_spatial_lag_2d.flatten()
 
-        from src.data.raster_processor import align_raster
         lst_minus1 = align_raster(lst_files[i - 1], template_path).values.flatten()
         lst_minus2 = align_raster(lst_files[i - 2], template_path).values.flatten()
         lst_minus3 = align_raster(lst_files[i - 3], template_path).values.flatten()
@@ -144,21 +141,10 @@ def build_tabular_dataset(config):
     return df
 
 
-# ------------------------------------------------------------------ #
-#  PyTorch Dataset for TSL graph models                               #
-# ------------------------------------------------------------------ #
-
 class NDVIGraphDataset(Dataset):
     """
     PyTorch Dataset for spatiotemporal NDVI prediction using TSL graph models.
-
-    Reads tabular_dataset.csv (must contain pixel_idx column) and
-    reconstructs 3D spatial arrays [T, N, F] with exact pixel placement.
-
-    Input structure per sample:
-        x : [window_size, n_nodes, n_dynamic_features]
-        u : [n_nodes, n_static_features]
-        y : [n_nodes, 1]  — target log_ndvi at t
+    Reconstructs 3D spatial arrays [T, N, F] with exact pixel placement.
     """
 
     DYNAMIC_COLS = [
@@ -189,7 +175,6 @@ class NDVIGraphDataset(Dataset):
         print(f"Loading dataset from {csv_path}...")
         df = pd.read_csv(csv_path)
 
-        # Validate pixel_idx column exists
         if 'pixel_idx' not in df.columns:
             raise ValueError(
                 "tabular_dataset.csv is missing the 'pixel_idx' column. "
@@ -226,7 +211,7 @@ class NDVIGraphDataset(Dataset):
             if len(sub) == 0:
                 continue
 
-            pix = sub['pixel_idx'].values.astype(int)   # exact grid positions
+            pix = sub['pixel_idx'].values.astype(int)
 
             for f_idx, col in enumerate(self.DYNAMIC_COLS):
                 if col in sub.columns:
@@ -311,21 +296,15 @@ class NDVIGraphDataset(Dataset):
         return x, u, y
 
 
-# ------------------------------------------------------------------ #
-#  Convenience builder                                                 #
-# ------------------------------------------------------------------ #
-
 def build_datasets(config, window_size=12):
     """
     Build train and test NDVIGraphDataset instances sharing the same scaler.
-    If tabular_dataset.csv lacks pixel_idx, recompiles it first.
     """
     csv_path   = os.path.join(config['paths']['processed_dir'], "tabular_dataset.csv")
     split_year = config['features']['train_split_year']
     height     = config['spatial']['height']
     width      = config['spatial']['width']
 
-    # --- Compile CSV if missing or lacking pixel_idx ---
     needs_compile = False
     if not os.path.exists(csv_path):
         print("tabular_dataset.csv not found — compiling from rasters...")
