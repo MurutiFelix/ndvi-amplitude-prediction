@@ -41,7 +41,7 @@ from src.utils.spatial import get_edge_index
 
 WINDOW_SIZE  = 12       # months lookback
 BATCH_SIZE   = 1        # one spatial snapshot per batch (full graph)
-N_EPOCHS     = 50
+N_EPOCHS     = 100
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY  = 1e-4
 PATIENCE      = 10      # early stopping patience

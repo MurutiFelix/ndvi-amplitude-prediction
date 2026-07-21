@@ -16,6 +16,10 @@ module load applications/eng/gpu/python/conda-26.1.0-python-3.12-vLLM
 source /scratch/lustre/apps/eng/gpu/miniconda3/etc/profile.d/conda.sh
 conda activate /scratch/lustre/users/$USER/envs/ndvi_env
 
+# --- Unset any conflicting device variables before torch loads ---
+unset CUDA_VISIBLE_DEVICES
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+
 # --- Working Directory Setup ---
 cd /scratch/lustre/users/$USER/ndvi-amplitude-prediction
 mkdir -p logs
