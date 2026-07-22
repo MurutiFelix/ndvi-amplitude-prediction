@@ -94,6 +94,7 @@ def build_grugcn(n_nodes, n_dynamic, n_static, window_size):
     """
     GRUGCNModel — GRU Encoder + GCN Decoder (time-then-space).
     """
+    # Dropped the invalid 'dropout' argument which is unsupported by TSL's GRUGCNModel constructor
     return GRUGCNModel(
         input_size  = n_dynamic,
         hidden_size = 96,         # Gentle reduction to protect top ranking performance capacity
@@ -103,7 +104,6 @@ def build_grugcn(n_nodes, n_dynamic, n_static, window_size):
         enc_layers  = 2,
         gcn_layers  = 2,
         norm        = 'mean',
-        dropout     = 0.15,       # Preserves expressive power for this high-performing architecture
     )
 
 
