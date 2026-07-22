@@ -113,7 +113,7 @@ def get_edge_index(height: int, width: int, cache_path: str = None) -> torch.Ten
 
     if cache_path and os.path.exists(cache_path):
         print(f"Loading cached edge index from {cache_path}...")
-        return torch.load(cache_path)
+        return torch.load(cache_path, weights_only=True)
 
     print(f"Building {height}×{width} grid edge index ({height * width:,} nodes)...")
     edge_index = build_grid_edge_index_fast(height, width)
