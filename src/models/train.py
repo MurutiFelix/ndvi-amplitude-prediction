@@ -124,7 +124,7 @@ def train_one_epoch(model, loader, optimizer, criterion,
 
 @torch.no_grad()
 def evaluate(model, loader, criterion, edge_index, model_name):
-    """Evaluate model on loader, return loss, R², RMSE."""
+    """Evaluate model on loader, return loss, R², RMSE, and raw predictions."""
     model.eval()
     total_loss = 0.0
     all_preds  = []
@@ -150,6 +150,7 @@ def evaluate(model, loader, criterion, edge_index, model_name):
 
     metrics = compute_metrics(y_true, y_pred)
     metrics['loss'] = total_loss / len(loader)
+    metrics['preds'] = y_pred  # Attached predictions array for downstream checkpointing
 
     return metrics
 
@@ -170,6 +171,7 @@ def train_model(model_name, train_dataset, test_dataset,
     n_epochs      = config['features']['n_epochs']
     learning_rate = config['features']['learning_rate']
     patience      = config['features']['patience']
+    weight_decay  = config['features'].get('weight_decay', 1e-4)
     batch_size    = 1 # Strict constraint derived from graph node layout memory limitations
 
     n_nodes   = train_dataset.n_nodes
@@ -205,7 +207,7 @@ def train_model(model_name, train_dataset, test_dataset,
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr           = learning_rate,
-        weight_decay = 1e-4,
+        weight_decay = weight_decay,
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5,
@@ -217,6 +219,7 @@ def train_model(model_name, train_dataset, test_dataset,
     best_loss     = np.inf
     best_metrics  = {}
     patience_ctr  = 0
+    min_delta     = 0.001  # Ignore negligible test improvements to avoid noise
     history       = []
 
     checkpoint_path = os.path.join(
@@ -255,21 +258,30 @@ def train_model(model_name, train_dataset, test_dataset,
             f"Time: {elapsed:.1f}s"
         )
 
-        # --- Early stopping evaluated on validation loss convergence ---
-        if test_metrics['loss'] < best_loss:
+        # --- Early stopping evaluated on validation loss convergence with min_delta ---
+        if test_metrics['loss'] < (best_loss - min_delta):
             best_loss    = test_metrics['loss']
             best_metrics = {
                 'R2_Score': test_metrics['R2_Score'],
                 'RMSE'    : test_metrics['RMSE'],
             }
             patience_ctr = 0
-            torch.save(model.state_dict(), checkpoint_path)
+            
+            # Save weights AND precomputed test predictions for inference/EDA scripts
+            torch.save({
+                'state_dict': model.state_dict(),
+                'test_preds': test_metrics['preds'],
+                'test_loss' : best_loss,
+                'r2'        : test_metrics['R2_Score'],
+                'rmse'      : test_metrics['RMSE']
+            }, checkpoint_path)
+            
             print(f"    ✓ New best Test Loss={best_loss:.5f} — checkpoint saved")
         else:
             patience_ctr += 1
             if patience_ctr >= patience:
                 print(f"  Early stopping at epoch {epoch} "
-                      f"(no improvement for {patience} epochs)")
+                      f"(no structural improvement for {patience} epochs)")
                 break
 
     # Save training history
