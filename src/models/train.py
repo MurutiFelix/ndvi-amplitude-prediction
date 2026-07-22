@@ -35,17 +35,8 @@ from src.data.dataset import NDVIGraphDataset, build_datasets
 from src.models.spatio_temporal import get_model, MODEL_REGISTRY
 from src.utils.spatial import get_edge_index
 
-# ------------------------------------------------------------------
-# Configuration
-# ------------------------------------------------------------------
-
-WINDOW_SIZE  = 12       # months lookback
-BATCH_SIZE   = 1        # one spatial snapshot per batch (full graph)
-N_EPOCHS     = 100
-LEARNING_RATE = 1e-3
-WEIGHT_DECAY  = 1e-4
-PATIENCE      = 10      # early stopping patience
-DEVICE        = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# Global hardware runtime constant
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 # ------------------------------------------------------------------
@@ -67,23 +58,16 @@ def prepare_tensors(x, u, y):
     Ensures input tensors match TSL format: [Batch, Time, Nodes, Features]
     Swaps axes if necessary, and projects 3D static features to 4D.
     """
-    # 1. Align Dynamic Features: x
-    # Nodes (N ~ 28779) will be much larger than lookback Window (T = 12).
-    # Swap axes if index 1 (Nodes) is larger than index 2 (Time).
     if x.dim() == 4 and x.shape[1] > x.shape[2]:
         x = x.transpose(1, 2)
 
-    # 2. Align Static Exogenous Features: u
     if u is not None:
         if u.dim() == 3:
-            # Shape is [Batch, Nodes, Features] (static, no time dimension).
-            # Expand u over the Time dimension of x so shape becomes [Batch, Time, Nodes, Features]
-            u = u.unsqueeze(1)  # -> [Batch, 1, Nodes, Features]
-            u = u.expand(-1, x.shape[1], -1, -1)  # -> [Batch, Time, Nodes, Features]
+            u = u.unsqueeze(1)  
+            u = u.expand(-1, x.shape[1], -1, -1)  
         elif u.dim() == 4 and u.shape[1] > u.shape[2]:
             u = u.transpose(1, 2)
 
-    # 3. Align Targets: y to [Batch, Nodes, 1]
     if y.dim() == 4:
         if y.shape[1] > y.shape[2]:
             y = y.transpose(1, 2)
@@ -99,17 +83,14 @@ def prepare_tensors(x, u, y):
 def forward_pass(model, x, u, ei, model_name):
     """Execute forward pass conforming exactly to TSL signatures."""
     if model_name == 'STID':
-        # STID has no dynamic/static exog parameters in this TSL version
         out = model(x)
     elif model_name in ('DCRNN', 'GRUGCNModel', 'GraphWaveNet'):
-        # Pass exogenous features using the explicit parameter name 'u'
         out = model(x, edge_index=ei, u=u)
     else:
         out = model(x, edge_index=ei)
     
-    # Standardize output to match target shape: [Batch, Nodes, 1]
     if out.dim() == 4:
-        out = out[:, 0, :, :]  # Isolate horizon step 0 -> [B, N, F]
+        out = out[:, 0, :, :]  
     return out
 
 
@@ -120,7 +101,6 @@ def train_one_epoch(model, loader, optimizer, criterion,
     total_loss = 0.0
 
     for x, u, y in loader:
-        # Align dimensions to: [Batch, Time, Nodes, Features]
         x, u, y = prepare_tensors(x, u, y)
 
         x = x.to(DEVICE)
@@ -134,7 +114,6 @@ def train_one_epoch(model, loader, optimizer, criterion,
         loss = criterion(out, y)
         loss.backward()
 
-        # Gradient clipping — important for RNN stability
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         optimizer.step()
@@ -152,7 +131,6 @@ def evaluate(model, loader, criterion, edge_index, model_name):
     all_true   = []
 
     for x, u, y in loader:
-        # Align dimensions to: [Batch, Time, Nodes, Features]
         x, u, y = prepare_tensors(x, u, y)
 
         x  = x.to(DEVICE)
@@ -182,10 +160,17 @@ def evaluate(model, loader, criterion, edge_index, model_name):
 
 def train_model(model_name, train_dataset, test_dataset,
                 edge_index, config):
-    """Full training loop for a single model."""
+    """Full training loop for a single model parsing hyperparameters from config."""
     print(f"\n{'='*60}")
     print(f"  Training: {model_name}")
     print(f"{'='*60}")
+
+    # Extract dynamic configuration values from config yaml
+    window_size   = config['features']['window_size']
+    n_epochs      = config['features']['n_epochs']
+    learning_rate = config['features']['learning_rate']
+    patience      = config['features']['patience']
+    batch_size    = 1 # Strict constraint derived from graph node layout memory limitations
 
     n_nodes   = train_dataset.n_nodes
     n_dynamic = train_dataset.n_dynamic_features
@@ -197,20 +182,20 @@ def train_model(model_name, train_dataset, test_dataset,
         n_nodes     = n_nodes,
         n_dynamic   = n_dynamic,
         n_static    = n_static,
-        window_size = WINDOW_SIZE,
+        window_size = window_size,
     ).to(DEVICE)
 
     # --- DataLoaders ---
     train_loader = DataLoader(
         train_dataset,
-        batch_size  = BATCH_SIZE,
-        shuffle     = False,   # must preserve temporal order
+        batch_size  = batch_size,
+        shuffle     = False,   
         num_workers = 4,
-        pin_memory  = (DEVICE.type == 'cuda'),  # only pin memory when GPU is present
+        pin_memory  = (DEVICE.type == 'cuda'),  
     )
     test_loader = DataLoader(
         test_dataset,
-        batch_size  = BATCH_SIZE,
+        batch_size  = batch_size,
         shuffle     = False,
         num_workers = 4,
         pin_memory  = (DEVICE.type == 'cuda'),
@@ -219,8 +204,8 @@ def train_model(model_name, train_dataset, test_dataset,
     # --- Optimizer and loss ---
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr           = LEARNING_RATE,
-        weight_decay = WEIGHT_DECAY,
+        lr           = learning_rate,
+        weight_decay = 1e-4,
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5,
@@ -229,7 +214,7 @@ def train_model(model_name, train_dataset, test_dataset,
     criterion = nn.MSELoss()
 
     # --- Training loop with early stopping ---
-    best_r2       = -np.inf
+    best_loss     = np.inf
     best_metrics  = {}
     patience_ctr  = 0
     history       = []
@@ -239,7 +224,7 @@ def train_model(model_name, train_dataset, test_dataset,
         f"checkpoint_{model_name}.pt"
     )
 
-    for epoch in range(1, N_EPOCHS + 1):
+    for epoch in range(1, n_epochs + 1):
         t0         = time.time()
         train_loss = train_one_epoch(
             model, train_loader, optimizer,
@@ -262,7 +247,7 @@ def train_model(model_name, train_dataset, test_dataset,
         })
 
         print(
-            f"  Epoch {epoch:03d}/{N_EPOCHS} | "
+            f"  Epoch {epoch:03d}/{n_epochs} | "
             f"Train Loss: {train_loss:.5f} | "
             f"Test Loss: {test_metrics['loss']:.5f} | "
             f"R²: {test_metrics['R2_Score']:.4f} | "
@@ -270,21 +255,21 @@ def train_model(model_name, train_dataset, test_dataset,
             f"Time: {elapsed:.1f}s"
         )
 
-        # --- Early stopping ---
-        if test_metrics['R2_Score'] > best_r2:
-            best_r2      = test_metrics['R2_Score']
+        # --- Early stopping evaluated on validation loss convergence ---
+        if test_metrics['loss'] < best_loss:
+            best_loss    = test_metrics['loss']
             best_metrics = {
                 'R2_Score': test_metrics['R2_Score'],
                 'RMSE'    : test_metrics['RMSE'],
             }
             patience_ctr = 0
             torch.save(model.state_dict(), checkpoint_path)
-            print(f"    ✓ New best R²={best_r2:.4f} — checkpoint saved")
+            print(f"    ✓ New best Test Loss={best_loss:.5f} — checkpoint saved")
         else:
             patience_ctr += 1
-            if patience_ctr >= PATIENCE:
+            if patience_ctr >= patience:
                 print(f"  Early stopping at epoch {epoch} "
-                      f"(no improvement for {PATIENCE} epochs)")
+                      f"(no improvement for {patience} epochs)")
                 break
 
     # Save training history
@@ -322,7 +307,7 @@ def main():
 
     # --- Build datasets ---
     print("\nBuilding train and test datasets...")
-    train_dataset, test_dataset = build_datasets(config, window_size=WINDOW_SIZE)
+    train_dataset, test_dataset = build_datasets(config, window_size=config['features']['window_size'])
 
     # --- Train all models sequentially ---
     all_results = {}

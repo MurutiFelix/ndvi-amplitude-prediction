@@ -29,8 +29,7 @@ from src.data.dataset import NDVIGraphDataset, build_datasets
 from src.models.spatio_temporal import get_model, MODEL_REGISTRY
 from src.utils.spatial import get_edge_index
 
-DEVICE      = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-WINDOW_SIZE = 12
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def load_model(model_name, n_nodes, n_dynamic, n_static, checkpoint_path, window_size):
@@ -109,17 +108,20 @@ def main():
     parser.add_argument('--split', type=str, default='test', choices=['train', 'test'])
     args = parser.parse_args()
 
+    # Read tracking settings natively from centralized parameters config file
     with open("src/config.yaml", "r") as f:
         config = yaml.safe_load(f)
 
     height, width = config['spatial']['height'], config['spatial']['width']
-    train_dataset, test_dataset = build_datasets(config, window_size=WINDOW_SIZE)
+    window_size = config['features']['window_size']
+    
+    train_dataset, test_dataset = build_datasets(config, window_size=window_size)
     dataset = test_dataset if args.split == 'test' else train_dataset
 
     edge_index = get_edge_index(height, width, os.path.join(config['paths']['processed_dir'], "edge_index.pt"))
     checkpoint_path = os.path.join(config['paths']['processed_dir'], f"checkpoint_{args.model}.pt")
     
-    model = load_model(args.model, dataset.n_nodes, dataset.n_dynamic_features, dataset.n_static_features, checkpoint_path, WINDOW_SIZE)
+    model = load_model(args.model, dataset.n_nodes, dataset.n_dynamic_features, dataset.n_static_features, checkpoint_path, window_size)
     window_idx = find_window(dataset, args.year, args.month)
     
     y_pred, y_true = predict_month(model, dataset, window_idx, edge_index, args.model)

@@ -82,9 +82,9 @@ def build_dcrnn(n_nodes, n_dynamic, n_static, window_size):
         output_size = 1,
         horizon     = 1,
         exog_size   = n_static,
-        hidden_size = 64,
+        hidden_size = 128,        # Upscaled from 64 for dense hidden tracking
         kernel_size = 2,
-        ff_size     = 256,
+        ff_size     = 512,        # Upscaled from 256 to expand layer capacity
         n_layers    = 2,
         dropout     = 0.1,
     )
@@ -96,7 +96,7 @@ def build_grugcn(n_nodes, n_dynamic, n_static, window_size):
     """
     return GRUGCNModel(
         input_size  = n_dynamic,
-        hidden_size = 64,
+        hidden_size = 128,        # Upscaled from 64 to enrich temporal representations
         output_size = 1,
         horizon     = 1,
         exog_size   = n_static,
@@ -115,8 +115,8 @@ def build_graphwavenet(n_nodes, n_dynamic, n_static, window_size):
         output_size          = 1,
         horizon              = 1,
         exog_size            = n_static,
-        hidden_size          = 32,
-        ff_size              = 128,
+        hidden_size          = 64,         # Upscaled from 32 to expand causal filter depth
+        ff_size              = 256,        # Upscaled from 128 for intermediate dense layers
         n_layers             = 4,
         temporal_kernel_size = 2,
         spatial_kernel_size  = 2,

@@ -17,6 +17,6 @@ features:
   train_split_year: 2021
   mode: "dl"          # options: "baselines" or "dl"
   window_size: 12
-  n_epochs: 50
+  n_epochs: 100       
   learning_rate: 0.001
-  patience: 10
+  patience: 25        
