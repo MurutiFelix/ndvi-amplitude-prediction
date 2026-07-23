@@ -2,7 +2,7 @@
 """
 Two responsibilities:
 1. build_tabular_dataset() — compiles rasters to CSV (includes pixel_idx column)
-2. NDVIGraphDataset        — PyTorch Dataset for TSL graph models
+2. NDVIGraphDataset        — PyTorch Dataset for TSL graph models (Train, Val, Test)
 """
 
 import os
@@ -58,14 +58,11 @@ def build_tabular_dataset(config):
         ndvi_t_2d    = rioxarray.open_rasterio(ndvi_files[i]).squeeze().values
         ndvi_prev_2d = rioxarray.open_rasterio(ndvi_files[i - 1]).squeeze().values
         
-        # Replace invalid pixels with 0 before filtering to prevent NaN propagation
-        # then mask back to NaN where the original was invalid
         ndvi_prev_valid = np.where(ndvi_prev_2d > 0, ndvi_prev_2d, 0.0)
         ndvi_prev_mask  = (ndvi_prev_2d > 0).astype(np.float32)
         ndvi_sum        = uniform_filter(ndvi_prev_valid, size=3, mode='nearest')
         ndvi_cnt        = uniform_filter(ndvi_prev_mask,  size=3, mode='nearest')
         
-        # Avoid division by zero — pixels where no valid neighbour exists get NaN
         ndvi_spatial_lag_2d = np.where(ndvi_cnt > 0, ndvi_sum / ndvi_cnt, np.nan)
         ndvi_t           = ndvi_t_2d.flatten()
         ndvi_spatial_lag = ndvi_spatial_lag_2d.flatten()
@@ -74,7 +71,6 @@ def build_tabular_dataset(config):
         lst_minus2 = align_raster(lst_files[i - 2], template_path).values.flatten()
         lst_minus3 = align_raster(lst_files[i - 3], template_path).values.flatten()
 
-        # Mask GEE NoData sentinel (-9999) to NaN
         lst_minus1 = np.where(lst_minus1 < -100, np.nan, lst_minus1)
         lst_minus2 = np.where(lst_minus2 < -100, np.nan, lst_minus2)
         lst_minus3 = np.where(lst_minus3 < -100, np.nan, lst_minus3)
@@ -110,13 +106,12 @@ def build_tabular_dataset(config):
         if n_valid == 0:
             continue
 
-        # pixel_idx stores the exact flattened grid position of each valid pixel
         pixel_idx = np.where(valid)[0]
 
         block = pd.DataFrame({
             'year'                   : np.full(n_valid, year,  dtype=np.int32),
             'month'                  : np.full(n_valid, month, dtype=np.int32),
-            'pixel_idx'              : pixel_idx,                        # ← KEY
+            'pixel_idx'              : pixel_idx,
             'log_ndvi'               : log_ndvi[valid],
             'lst_driver_lag1'        : lst_minus1[valid],
             'lst_driver_lag2'        : lst_minus2[valid],
@@ -157,20 +152,22 @@ class NDVIGraphDataset(Dataset):
 
     def __init__(
         self,
-        csv_path   : str,
-        height     : int             = 159,
-        width      : int             = 181,
-        window_size: int             = 12,
-        split      : str             = 'train',
-        split_year : int             = 2021,
-        scaler     : StandardScaler  = None,
+        csv_path    : str,
+        height      : int             = 159,
+        width       : int             = 181,
+        window_size : int             = 12,
+        split       : str             = 'train',
+        split_year  : int             = 2021,  # Train End Year
+        val_end_year: int             = 2023,  # Validation End Year
+        scaler      : StandardScaler  = None,
     ):
-        self.height      = height
-        self.width       = width
-        self.n_nodes     = height * width
-        self.window_size = window_size
-        self.split       = split
-        self.split_year  = split_year
+        self.height       = height
+        self.width        = width
+        self.n_nodes      = height * width
+        self.window_size  = window_size
+        self.split        = split
+        self.split_year   = split_year
+        self.val_end_year = val_end_year
 
         print(f"Loading dataset from {csv_path}...")
         df = pd.read_csv(csv_path)
@@ -181,21 +178,17 @@ class NDVIGraphDataset(Dataset):
                 "Please recompile by deleting the CSV and rerunning build_tabular_dataset()."
             )
 
-        # --- One-hot encode soil ---
         df = pd.get_dummies(df, columns=['soil_snum'], drop_first=True)
         soil_cols = [c for c in df.columns if c.startswith('soil_snum_')]
         self.static_cols = ['twi'] + soil_cols
 
-        # --- Sort chronologically ---
         df = df.sort_values(['year', 'month', 'pixel_idx']).reset_index(drop=True)
 
-        # --- Unique timesteps ---
         timesteps = df[['year', 'month']].drop_duplicates().sort_values(
             ['year', 'month']
         ).reset_index(drop=True)
         self.timesteps = timesteps
 
-        # --- Build 3D arrays [T, N, F] using pixel_idx for exact placement ---
         print("Pivoting tabular data to spatial grid format...")
         T         = len(timesteps)
         n_dynamic = len(self.DYNAMIC_COLS)
@@ -223,10 +216,19 @@ class NDVIGraphDataset(Dataset):
                         static_array[pix, f_idx] = sub[col].values.astype(np.float32)
                 static_filled = True
 
-        # --- Chronological split ---
+        # --- Three-Way Chronological Split ---
         train_mask = (timesteps['year'] <= split_year).values
-        test_mask  = (timesteps['year'] >  split_year).values
-        valid_t    = np.where(train_mask if split == 'train' else test_mask)[0]
+        val_mask   = ((timesteps['year'] > split_year) & (timesteps['year'] <= val_end_year)).values
+        test_mask  = (timesteps['year'] > val_end_year).values
+
+        if split == 'train':
+            valid_t = np.where(train_mask)[0]
+        elif split == 'val':
+            valid_t = np.where(val_mask)[0]
+        elif split == 'test':
+            valid_t = np.where(test_mask)[0]
+        else:
+            raise ValueError(f"Unknown split option: {split}. Choose from 'train', 'val', 'test'.")
 
         # --- Sliding windows ---
         self.windows = []
@@ -298,12 +300,13 @@ class NDVIGraphDataset(Dataset):
 
 def build_datasets(config, window_size=12):
     """
-    Build train and test NDVIGraphDataset instances sharing the same scaler.
+    Build train, validation, and test NDVIGraphDataset instances sharing the same scaler.
     """
-    csv_path   = os.path.join(config['paths']['processed_dir'], "tabular_dataset.csv")
-    split_year = config['features']['train_split_year']
-    height     = config['spatial']['height']
-    width      = config['spatial']['width']
+    csv_path     = os.path.join(config['paths']['processed_dir'], "tabular_dataset.csv")
+    split_year   = config['features']['train_split_year']
+    val_end_year = config['features']['val_end_year']
+    height       = config['spatial']['height']
+    width        = config['spatial']['width']
 
     needs_compile = False
     if not os.path.exists(csv_path):
@@ -325,22 +328,35 @@ def build_datasets(config, window_size=12):
         print(f"Dataset saved to {csv_path}")
 
     train_dataset = NDVIGraphDataset(
-        csv_path    = csv_path,
-        height      = height,
-        width       = width,
-        window_size = window_size,
-        split       = 'train',
-        split_year  = split_year,
+        csv_path     = csv_path,
+        height       = height,
+        width        = width,
+        window_size  = window_size,
+        split        = 'train',
+        split_year   = split_year,
+        val_end_year = val_end_year,
+    )
+
+    val_dataset = NDVIGraphDataset(
+        csv_path     = csv_path,
+        height       = height,
+        width        = width,
+        window_size  = window_size,
+        split        = 'val',
+        split_year   = split_year,
+        val_end_year = val_end_year,
+        scaler       = train_dataset.scaler,
     )
 
     test_dataset = NDVIGraphDataset(
-        csv_path    = csv_path,
-        height      = height,
-        width       = width,
-        window_size = window_size,
-        split       = 'test',
-        split_year  = split_year,
-        scaler      = train_dataset.scaler,
+        csv_path     = csv_path,
+        height       = height,
+        width        = width,
+        window_size  = window_size,
+        split        = 'test',
+        split_year   = split_year,
+        val_end_year = val_end_year,
+        scaler       = train_dataset.scaler,
     )
 
-    return train_dataset, test_dataset
+    return train_dataset, val_dataset, test_dataset
