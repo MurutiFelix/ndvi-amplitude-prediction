@@ -14,10 +14,12 @@ paths:
   soil_raster: "data/static/Soil_DSMW.tif"
 
 features:
+  # 80-10-10  Train-Val-Test 
   train_split_year: 2021
+  val_end_year: 2023
   mode: "dl"          # options: "baselines" or "dl"
   window_size: 12
   n_epochs: 100       
   learning_rate: 0.001
   weight_decay: 0.001  # Dynamically exposed global L2 regularization
-  patience: 25        
+  patience: 25

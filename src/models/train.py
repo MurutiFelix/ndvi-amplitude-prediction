@@ -2,7 +2,8 @@
 """
 Deep Learning training loop for spatiotemporal NDVI prediction.
 
-Trains 4 TSL graph models sequentially with AMP acceleration.
+Trains TSL graph models sequentially with AMP acceleration using a strict
+three-way (Train, Val, Test) split to eliminate test-set data leakage.
 
 Usage:
     python -m src.models.train
@@ -92,12 +93,10 @@ def train_one_epoch(model, loader, optimizer, criterion,
 
         optimizer.zero_grad(set_to_none=True)
 
-        # Updated modern torch.amp.autocast API
         with torch.amp.autocast('cuda', enabled=(DEVICE.type == 'cuda')):
             out = forward_pass(model, x, u, ei, model_name)
             loss = criterion(out, y)
 
-        # Scaled Backward Pass
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -124,7 +123,6 @@ def evaluate(model, loader, criterion, edge_index, model_name):
         y  = y.to(DEVICE, non_blocking=True)
         ei = edge_index.to(DEVICE, non_blocking=True)
 
-        # Updated modern torch.amp.autocast API
         with torch.amp.autocast('cuda', enabled=(DEVICE.type == 'cuda')):
             out = forward_pass(model, x, u, ei, model_name)
             loss = criterion(out, y)
@@ -147,8 +145,8 @@ def evaluate(model, loader, criterion, edge_index, model_name):
 # Main training orchestrator
 # ------------------------------------------------------------------
 
-def train_model(model_name, train_dataset, test_dataset, edge_index, config):
-    """Full training loop for a single model parsing hyperparameters from config."""
+def train_model(model_name, train_dataset, val_dataset, test_dataset, edge_index, config):
+    """Full training loop optimizing on Val Loss and evaluating finally on Test."""
     print(f"\n{'='*60}")
     print(f"  Training: {model_name}")
     print(f"{'='*60}")
@@ -167,38 +165,32 @@ def train_model(model_name, train_dataset, test_dataset, edge_index, config):
         window_size = window_size,
     ).to(DEVICE)
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size         = 1,
-        shuffle            = False,
-        num_workers        = 4,
-        persistent_workers = True,
-        pin_memory         = (DEVICE.type == 'cuda'),
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size         = 1,
-        shuffle            = False,
-        num_workers        = 4,
-        persistent_workers = True,
-        pin_memory         = (DEVICE.type == 'cuda'),
-    )
+    # Pin memory config helper dict
+    loader_kwargs = {
+        'batch_size': 1,
+        'shuffle': False,
+        'num_workers': 4,
+        'persistent_workers': True,
+        'pin_memory': (DEVICE.type == 'cuda')
+    }
+
+    train_loader = DataLoader(train_dataset, **loader_kwargs)
+    val_loader   = DataLoader(val_dataset, **loader_kwargs)
+    test_loader  = DataLoader(test_dataset, **loader_kwargs)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    
-    # Updated modern torch.amp.GradScaler API
     scaler    = torch.amp.GradScaler('cuda', enabled=(DEVICE.type == 'cuda'))
     
+    # Track Plateau steps using Validation Loss
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6
     )
     criterion = nn.MSELoss()
 
-    best_loss    = np.inf
-    best_metrics = {}
-    patience_ctr = 0
-    min_delta    = 1e-5
-    history      = []
+    best_val_loss = np.inf
+    patience_ctr  = 0
+    min_delta     = 1e-5
+    history       = []
 
     checkpoint_path = os.path.join(
         config['paths']['processed_dir'],
@@ -207,69 +199,88 @@ def train_model(model_name, train_dataset, test_dataset, edge_index, config):
 
     for epoch in range(1, n_epochs + 1):
         t0 = time.time()
+        
+        # 1. Train Step
         train_loss = train_one_epoch(
             model, train_loader, optimizer,
             criterion, edge_index, model_name, scaler
         )
-        test_metrics = evaluate(
-            model, test_loader, criterion,
+        
+        # 2. Validation Step (Used exclusively for optimization steering)
+        val_metrics = evaluate(
+            model, val_loader, criterion,
             edge_index, model_name
         )
         elapsed = time.time() - t0
 
-        scheduler.step(test_metrics['loss'])
+        scheduler.step(val_metrics['loss'])
 
         history.append({
-            'epoch'     : epoch,
+            'epoch': epoch,
             'train_loss': train_loss,
-            'test_loss' : test_metrics['loss'],
-            'test_r2'   : test_metrics['R2_Score'],
-            'test_rmse' : test_metrics['RMSE'],
+            'val_loss': val_metrics['loss'],
+            'val_r2': val_metrics['R2_Score'],
+            'val_rmse': val_metrics['RMSE'],
         })
 
         print(
             f"  Epoch {epoch:03d}/{n_epochs} | "
             f"Train Loss: {train_loss:.5f} | "
-            f"Test Loss: {test_metrics['loss']:.5f} | "
-            f"R²: {test_metrics['R2_Score']:.4f} | "
-            f"RMSE: {test_metrics['RMSE']:.4f} | "
+            f"Val Loss: {val_metrics['loss']:.5f} | "
+            f"Val R²: {val_metrics['R2_Score']:.4f} | "
+            f"Val RMSE: {val_metrics['RMSE']:.4f} | "
             f"Time: {elapsed:.1f}s"
         )
 
-        if test_metrics['loss'] < (best_loss - min_delta):
-            best_loss    = test_metrics['loss']
-            best_metrics = {
-                'R2_Score': test_metrics['R2_Score'],
-                'RMSE'    : test_metrics['RMSE'],
-            }
+        # Early Stopping check strictly using Validation metrics
+        if val_metrics['loss'] < (best_val_loss - min_delta):
+            best_val_loss = val_metrics['loss']
             patience_ctr = 0
 
             torch.save({
                 'state_dict': model.state_dict(),
-                'test_preds': test_metrics['preds'],
-                'test_loss' : best_loss,
-                'r2'        : test_metrics['R2_Score'],
-                'rmse'      : test_metrics['RMSE']
+                'val_loss': best_val_loss,
+                'val_r2': val_metrics['R2_Score'],
+                'val_rmse': val_metrics['RMSE']
             }, checkpoint_path)
 
-            print(f"    ✓ New best Test Loss={best_loss:.5f} — checkpoint saved")
+            print(f"    ✓ New best Val Loss={best_val_loss:.5f} — checkpoint saved")
         else:
             patience_ctr += 1
             if patience_ctr >= patience:
-                print(f"  Early stopping at epoch {epoch} "
-                      f"(no structural improvement for {patience} epochs)")
+                print(f"  Early stopping at epoch {epoch} (no structural val improvement for {patience} epochs)")
                 break
 
-    history_path = os.path.join(
-        config['paths']['processed_dir'],
-        f"history_{model_name}.csv"
-    )
+    # Save tracking history meta-logs
+    history_path = os.path.join(config['paths']['processed_dir'], f"history_{model_name}.csv")
     pd.DataFrame(history).to_csv(history_path, index=False)
     print(f"  Training history saved to {history_path}")
-    print(f"  Best Test R²={best_metrics['R2_Score']:.4f} | "
-          f"RMSE={best_metrics['RMSE']:.4f}")
 
-    return best_metrics
+    # ==================================================================
+    # 3. Final Evaluation Step (Completely Out-of-Sample)
+    # ==================================================================
+    print(f"  Running final evaluation pass on clean Test Set...")
+    checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
+    model.load_state_dict(checkpoint['state_dict'])
+    
+    test_metrics = evaluate(model, test_loader, criterion, edge_index, model_name)
+    
+    # Save test metrics and predictions back into the checkpoint archive cleanly
+    checkpoint['test_preds'] = test_metrics['preds']
+    checkpoint['test_loss']  = test_metrics['loss']
+    checkpoint['test_r2']    = test_metrics['R2_Score']
+    checkpoint['test_rmse']  = test_metrics['RMSE']
+    torch.save(checkpoint, checkpoint_path)
+
+    print(f"  Best Val R²={checkpoint['val_r2']:.4f} | RMSE={checkpoint['val_rmse']:.4f}")
+    print(f"  --> Final Unbiased Test R²={test_metrics['R2_Score']:.4f} | RMSE={test_metrics['RMSE']:.4f}")
+
+    return {
+        'Val_R2': checkpoint['val_r2'],
+        'Val_RMSE': checkpoint['val_rmse'],
+        'Test_R2': test_metrics['R2_Score'],
+        'Test_RMSE': test_metrics['RMSE']
+    }
 
 
 def main():
@@ -287,8 +298,12 @@ def main():
     )
     print(f"Edge index: {edge_index.shape}")
 
-    print("\nBuilding train and test datasets...")
-    train_dataset, test_dataset = build_datasets(config, window_size=config['features']['window_size'])
+    print("\nBuilding train, validation, and test datasets...")
+    # build_datasets now handles three targets using the config
+    train_dataset, val_dataset, test_dataset = build_datasets(
+        config, 
+        window_size=config['features']['window_size']
+    )
 
     all_results = {}
 
@@ -297,6 +312,7 @@ def main():
             metrics = train_model(
                 model_name    = model_name,
                 train_dataset = train_dataset,
+                val_dataset   = val_dataset,
                 test_dataset  = test_dataset,
                 edge_index    = edge_index,
                 config        = config,
@@ -304,7 +320,7 @@ def main():
             all_results[model_name] = metrics
         except Exception as e:
             print(f"\n[ERROR] {model_name} failed: {e}")
-            all_results[model_name] = {'R2_Score': None, 'RMSE': None}
+            all_results[model_name] = {'Val_R2': None, 'Val_RMSE': None, 'Test_R2': None, 'Test_RMSE': None}
             import traceback
             traceback.print_exc()
             continue
