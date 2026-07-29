@@ -216,7 +216,7 @@ class NDVIGraphDataset(Dataset):
                         static_array[pix, f_idx] = sub[col].values.astype(np.float32)
                 static_filled = True
 
-        # --- Three-Way Chronological Split ---
+        # Three-Way Chronological Split 
         train_mask = (timesteps['year'] <= split_year).values
         val_mask   = ((timesteps['year'] > split_year) & (timesteps['year'] <= val_end_year)).values
         test_mask  = (timesteps['year'] > val_end_year).values
@@ -230,7 +230,7 @@ class NDVIGraphDataset(Dataset):
         else:
             raise ValueError(f"Unknown split option: {split}. Choose from 'train', 'val', 'test'.")
 
-        # --- Sliding windows ---
+        # Sliding windows 
         self.windows = []
         for t in valid_t:
             start = t - window_size
@@ -241,7 +241,7 @@ class NDVIGraphDataset(Dataset):
         print(f"  Split '{split}': {len(self.windows)} windows "
               f"from {len(valid_t)} valid timesteps")
 
-        # --- Normalize dynamic features (fit on train only) ---
+        # Normalize dynamic features (fit on train only) 
         train_t_indices = np.where(train_mask)[0]
         train_dynamic   = dynamic_array[train_t_indices]
         flat_train      = train_dynamic.reshape(-1, n_dynamic)
@@ -263,7 +263,7 @@ class NDVIGraphDataset(Dataset):
         ).astype(np.float32)
         self.dynamic_array = flat_scaled.reshape(T, self.n_nodes, n_dynamic)
 
-        # --- Normalize static features ---
+        # Normalize static features 
         static_scaler = StandardScaler()
         valid_static  = ~np.isnan(static_array).any(axis=1)
         static_scaled = static_array.copy()

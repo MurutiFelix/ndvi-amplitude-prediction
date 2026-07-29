@@ -85,7 +85,7 @@ class NDVIBaselines:
                 print("Warning: 'year' column not found! Initializing year_trend to 0.0.")
                 df_working['year_trend'] = 0.0
 
-        # 3. One-hot encode soil classification categories safely (ensuring they are floats)
+        # 3. One-hot encode soil classification categories
         df_encoded = pd.get_dummies(df_working, columns=['soil_snum'], drop_first=True, dtype=float)
         soil_cols = [col for col in df_encoded.columns if col.startswith('soil_snum_')]
         
@@ -97,14 +97,14 @@ class NDVIBaselines:
             'month_sin', 'month_cos', 'year_trend'
         ]
         
-        # Re-introduce key interactions from your July 7th run (if present in DataFrame)
+        # key interactions features 
         interaction_features = []
         possible_interactions = ['lst_x_precip', 'twi_x_precip', 'twi_x_lst']
         for col in possible_interactions:
             if col in df_encoded.columns:
                 interaction_features.append(col)
             elif 'lst_driver_lag1' in df_encoded.columns and 'log_precip_driver_lag1' in df_encoded.columns:
-                # Dynamically construct them if they aren't pre-computed
+                # Dynamically construct them if not pre-computed
                 if col == 'lst_x_precip':
                     df_encoded['lst_x_precip'] = df_encoded['lst_driver_lag1'] * df_encoded['log_precip_driver_lag1']
                     interaction_features.append('lst_x_precip')
@@ -126,7 +126,7 @@ class NDVIBaselines:
         X_test = df_encoded.loc[test_mask, self.features].copy()
         y_test = df_encoded.loc[test_mask, 'log_ndvi'].copy()
         
-        # 6. Chronological Imputation (medians calculated strictly from X_train)
+        # 6. Chronological Imputation from X_train
         all_continuous = continuous_features + interaction_features
         train_medians = X_train[all_continuous].median()
         X_train[all_continuous] = X_train[all_continuous].fillna(train_medians)
@@ -136,7 +136,7 @@ class NDVIBaselines:
             X_train[soil_cols] = X_train[soil_cols].fillna(0.0)
             X_test[soil_cols] = X_test[soil_cols].fillna(0.0)
             
-        # 7. Standard Scaling (fitted strictly on training set)
+        # 7. Standard Scaling on training set
         X_train[all_continuous] = self.scaler.fit_transform(X_train[all_continuous])
         X_test[all_continuous] = self.scaler.transform(X_test[all_continuous])
         
@@ -163,7 +163,7 @@ class NDVIBaselines:
         X_test_const = sm.add_constant(X_test, has_constant='add')
         
         glm_model = sm.GLM(y_train, X_train_const, family=sm.families.Gaussian())
-        self.glm_results = glm_model.fit()  # Stored directly as raw statsmodels object
+        self.glm_results = glm_model.fit()  
         
         # Save wrapped versions to the models dictionary to handle direct raw predict calls safely
         wrapped_glm = StatsmodelsPredictionWrapper(self.glm_results)
@@ -185,13 +185,13 @@ class NDVIBaselines:
         }
         results['OLS'] = results['GLM_Gaussian']
 
-        # --- 2. Random Forest Regressor ---
+        # 2. Random Forest Regressor 
         print("Training Random Forest (this may take a few minutes)...")
         rf = RandomForestRegressor(
             n_estimators=400, 
             max_depth=20, 
             min_samples_leaf=75,
-            max_features=0.3, # Constrained to prevent overfitting/OOM on big data
+            max_features=0.3, 
             random_state=42, 
             n_jobs=-1
         )
@@ -203,18 +203,17 @@ class NDVIBaselines:
             'MAE': mean_absolute_error(y_test, rf_preds)
         }
         
-        # Save to models dictionary
         self.models['RandomForest'] = rf
         
-        # Map feature importances to feature names and sort them
+        # Map feature importances 
         self.rf_feature_importance = pd.Series(
             rf.feature_importances_, 
             index=self.features
         ).sort_values(ascending=False)
 
-        # --- 3. XGBoost Regressor ---
+        # 3. XGBoost Regressor 
         print("Training XGBoost...")
-        # Early stopping validation split from train set to protect the forward test set
+        # Early stopping validation split from train set 
         val_size = int(len(X_train) * 0.1)
         X_tr, X_val = X_train.iloc[:-val_size], X_train.iloc[-val_size:]
         y_tr, y_val = y_train.iloc[:-val_size], y_train.iloc[-val_size:]
@@ -247,7 +246,7 @@ class NDVIBaselines:
         # Save to models dictionary
         self.models['XGBoost'] = xgb
         
-        # --- Print Performance Matrix ---
+        # Print Performance Matrix 
         print("\n" + "="*50)
         print("         BASELINE MODEL PERFORMANCE ON FORWARD TEST SET")
         print("="*50)
@@ -264,5 +263,4 @@ class NDVIBaselines:
 
 
 if __name__ == "__main__":
-    # Test script loading and structures if executed directly
     print("Baseline script compiled successfully.")
