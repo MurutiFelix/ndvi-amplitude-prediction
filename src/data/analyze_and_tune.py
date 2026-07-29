@@ -40,10 +40,10 @@ def main():
         f.write(str(evaluator.glm_results.summary()))
     print(f"GLM summary saved to {glm_summary_path}")
 
-    # --- Save metrics ---
+    # Save metrics 
     metrics_df.to_csv(os.path.join(config['paths']['processed_dir'], "baseline_metrics.csv"))
 
-    # --- Random Forest feature importances ---
+    # RF feature importances 
     print("\nSaving Random Forest Feature Importances...")
     rf_fi = evaluator.rf_feature_importance
     rf_fi.to_csv(
@@ -52,7 +52,7 @@ def main():
     )
     print("Top 10 RF Features:\n", rf_fi.head(10))
 
-    # --- XGBoost feature importances ---
+    # XGBoost feature importances
     print("\nExtracting XGBoost Feature Importances...")
     xgb_model = evaluator.models["XGBoost"]
     xgb_fi = pd.Series(
@@ -65,7 +65,7 @@ def main():
     )
     print("Top 10 XGBoost Features:\n", xgb_fi.head(10))
 
-    # --- Multi-Model Prediction and Residual Extraction ---
+    # Multi-Model Prediction and Residual Extraction 
     print("\nComputing test set predictions for all baseline models...")
     
     # Generate predictions for Scikit-Learn / XGBoost models
@@ -73,7 +73,7 @@ def main():
     rf_preds  = evaluator.models["RandomForest"].predict(X_test)
     xgb_preds = xgb_model.predict(X_test)
     
-    # Generate predictions for statsmodels GLM (requires prepended intercept constant)
+    # Generate predictions for statsmodels GLM 
     X_test_const = sm.add_constant(X_test, has_constant='add')
     glm_preds = evaluator.glm_results.predict(X_test_const)
     
@@ -86,13 +86,12 @@ def main():
         'XGBoost_pred'  : xgb_preds
     })
     
-    # Lustre Filesystem Safe Export: write chunks using standard Python csv module
+    # Lustre File system Export: write chunks using standard Python csv module
     output_path = os.path.join(config['paths']['processed_dir'], "test_residuals_dataframe.csv")
     print(f"Writing multi-model predictions safely to {output_path}...")
     
     with open(output_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        # Write the header
         writer.writerow(error_diagnostics.columns)
         
         # Stream the data in chunks of 100k rows using python's buffered writer
@@ -107,7 +106,7 @@ def main():
     print(f"  RF MAE:      {np.abs(y_test.values - rf_preds).mean():.5f}")
     print(f"  XGBoost MAE: {np.abs(y_test.values - xgb_preds).mean():.5f}")
 
-    # --- XGBoost hyperparameter tuning with chronologically safe CV ---
+    # XGBoost hyperparameter tuning chronologically 
     print("\nInitializing hyperparameter tuning sweep on XGBoost matrix...")
     param_dist = {
         'max_depth'        : [6, 8, 10, 12],
@@ -125,7 +124,7 @@ def main():
         n_jobs=-1
     )
 
-    # TimeSeriesSplit preserves temporal order — no future data leaks into training folds
+    # TimeSeriesSplit preserves temporal order 
     tscv = TimeSeriesSplit(n_splits=3)
 
     search = RandomizedSearchCV(
@@ -146,7 +145,7 @@ def main():
     print("Best Hyperparameters Discovered:", search.best_params_)
     print(f"Optimal Search Fold R2 Score:    {search.best_score_:.6f}")
 
-    # Export discovered hyperparameters
+    # Export hyperparameters
     pd.DataFrame([search.best_params_]).to_csv(
         os.path.join(config['paths']['processed_dir'], "optimized_xgb_hyperparameters.csv"),
         index=False
