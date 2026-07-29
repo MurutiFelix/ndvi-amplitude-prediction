@@ -12,7 +12,7 @@ Usage:
         --month 6
 
 Output:
-    data/processed/predicted_NDVI_{model}_{year}_{month:02d}.tif
+    data/processed/predicted_NDVI_{model_{year}_{month:02d}.tif
     data/processed/residual_NDVI_{model}_{year}_{month:02d}.tif
 """
 

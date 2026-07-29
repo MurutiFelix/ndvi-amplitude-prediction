@@ -2,8 +2,8 @@
 """
 Deep Learning training loop for spatiotemporal NDVI prediction.
 
-Trains TSL graph models sequentially with AMP acceleration using a strict
-three-way (Train, Val, Test) split to eliminate test-set data leakage.
+Trains TSL graph models sequentially with AMP acceleration using a 
+three-way (Train, Val, Test) split.
 
 Usage:
     python -m src.models.train
@@ -26,9 +26,7 @@ from src.utils.spatial import get_edge_index
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-# ------------------------------------------------------------------
 # Helpers
-# ------------------------------------------------------------------
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     """Compute R² and RMSE while ignoring missing/masked values safely."""
@@ -141,9 +139,9 @@ def evaluate(model, loader, criterion, edge_index, model_name):
     return metrics
 
 
-# ------------------------------------------------------------------
+
 # Main training orchestrator
-# ------------------------------------------------------------------
+
 
 def train_model(model_name, train_dataset, val_dataset, test_dataset, edge_index, config):
     """Full training loop optimizing on Val Loss and evaluating finally on Test."""
@@ -206,7 +204,7 @@ def train_model(model_name, train_dataset, val_dataset, test_dataset, edge_index
             criterion, edge_index, model_name, scaler
         )
         
-        # 2. Validation Step (Used exclusively for optimization steering)
+        # 2. Validation Step
         val_metrics = evaluate(
             model, val_loader, criterion,
             edge_index, model_name
@@ -232,7 +230,7 @@ def train_model(model_name, train_dataset, val_dataset, test_dataset, edge_index
             f"Time: {elapsed:.1f}s"
         )
 
-        # Early Stopping check strictly using Validation metrics
+        # Early Stopping check using Validation metrics
         if val_metrics['loss'] < (best_val_loss - min_delta):
             best_val_loss = val_metrics['loss']
             patience_ctr = 0
@@ -256,9 +254,9 @@ def train_model(model_name, train_dataset, val_dataset, test_dataset, edge_index
     pd.DataFrame(history).to_csv(history_path, index=False)
     print(f"  Training history saved to {history_path}")
 
-    # ==================================================================
-    # 3. Final Evaluation Step (Completely Out-of-Sample)
-    # ==================================================================
+    
+    # 3. Final Evaluation Step 
+   
     print(f"  Running final evaluation pass on clean Test Set...")
     checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
     model.load_state_dict(checkpoint['state_dict'])
@@ -299,7 +297,7 @@ def main():
     print(f"Edge index: {edge_index.shape}")
 
     print("\nBuilding train, validation, and test datasets...")
-    # build_datasets now handles three targets using the config
+    # build_datasets handles three targets using the config
     train_dataset, val_dataset, test_dataset = build_datasets(
         config, 
         window_size=config['features']['window_size']

@@ -33,7 +33,7 @@ def main():
         run_baselines()
 
     elif mode == 'dl':
-        print("Routing to deep learning pipeline (TSL graph models)...")
+        print("Routing to deep learning pipeline ...")
         from src.models.train import main as run_dl
         run_dl()
 
