@@ -1,8 +1,10 @@
 # src/models/baselines.py
 """
-Rebuilt baseline models pipeline.
+baseline models pipeline.
 Strictly excludes 'ndvi_spatial_lag' to eliminate target leakage and 
-focuses on biophysical, topographic, and temporal drivers.
+enforces a three-way chronological split (Train <= 2021, Val 2022-2023, Test > 2023)
+to directly match the Deep Learning evaluation window.
+Excludes OLS to remove structural redundancy.
 """
 
 import os
@@ -17,7 +19,7 @@ from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 
 class StatsmodelsPredictionWrapper:
     """
-    Lightweight wrapper for statsmodels GLM/OLS results.
+    Lightweight wrapper for statsmodels GLM results.
     Automatically prepends the intercept constant during predict calls 
     to match the expected dimensions of the fitted model.
     """
@@ -47,19 +49,21 @@ class NDVIBaselines:
         self.rf_feature_importance = None  
         self.models = {}  
         
-    def prepare_data(self, df, train_split_year=None):
+    def prepare_data(self, df, train_split_year=None, val_end_year=None):
         """
-        Performs chronological train/test splitting, handles categorical soil features,
-        imputes missing values strictly using training data medians, and scales continuous features.
-        
-        Dynamically constructs temporal features and interaction terms if they are missing.
-        This explicitly leaves out 'ndvi_spatial_lag' to prevent target leakage.
+        Performs a three-way chronological train/val/test split matching the DL dataset.
+        Handles categorical soil features, imputes missing values strictly using training 
+        data medians, and scales continuous features based strictly on training distributions.
         """
         if train_split_year is None:
-            # Fallback to 2021 if not specified in config
             train_split_year = self.config.get('features', {}).get('train_split_year', 2021)
+        if val_end_year is None:
+            val_end_year = self.config.get('features', {}).get('val_end_year', 2023)
             
-        print(f"Preparing matrices. Train split year: <= {train_split_year}")
+        print(f"Preparing matrices.")
+        print(f"  Train split window : Years <= {train_split_year}")
+        print(f"  Validation window  : Years {train_split_year + 1} to {val_end_year}")
+        print(f"  Test split window  : Years > {val_end_year}")
         
         # 1. Start with a working copy so we don't mutate the raw input DataFrame
         df_working = df.copy()
@@ -71,7 +75,6 @@ class NDVIBaselines:
                 df_working['month_sin'] = np.sin(2 * np.pi * df_working['month'] / 12.0)
                 df_working['month_cos'] = np.cos(2 * np.pi * df_working['month'] / 12.0)
             else:
-                # If no month column is present at all, fall back to 0.0 values
                 print("Warning: 'month' column not found! Initializing default 0.0 for sin/cos.")
                 df_working['month_sin'] = 0.0
                 df_working['month_cos'] = 0.0
@@ -104,7 +107,6 @@ class NDVIBaselines:
             if col in df_encoded.columns:
                 interaction_features.append(col)
             elif 'lst_driver_lag1' in df_encoded.columns and 'log_precip_driver_lag1' in df_encoded.columns:
-                # Dynamically construct them if not pre-computed
                 if col == 'lst_x_precip':
                     df_encoded['lst_x_precip'] = df_encoded['lst_driver_lag1'] * df_encoded['log_precip_driver_lag1']
                     interaction_features.append('lst_x_precip')
@@ -117,58 +119,70 @@ class NDVIBaselines:
 
         self.features = continuous_features + interaction_features + soil_cols
         
-        # 5. Chronological Train-Test Split
+        # 5. Three-Way Chronological Train-Validation-Test Split
         train_mask = df_encoded['year'] <= train_split_year
-        test_mask = df_encoded['year'] > train_split_year
+        val_mask = (df_encoded['year'] > train_split_year) & (df_encoded['year'] <= val_end_year)
+        test_mask = df_encoded['year'] > val_end_year
         
         X_train = df_encoded.loc[train_mask, self.features].copy()
         y_train = df_encoded.loc[train_mask, 'log_ndvi'].copy()
+        
+        X_val = df_encoded.loc[val_mask, self.features].copy()
+        y_val = df_encoded.loc[val_mask, 'log_ndvi'].copy()
+        
         X_test = df_encoded.loc[test_mask, self.features].copy()
         y_test = df_encoded.loc[test_mask, 'log_ndvi'].copy()
         
-        # 6. Chronological Imputation from X_train
+        # 6. Chronological Imputation strictly derived from X_train medians
         all_continuous = continuous_features + interaction_features
         train_medians = X_train[all_continuous].median()
+        
         X_train[all_continuous] = X_train[all_continuous].fillna(train_medians)
+        X_val[all_continuous] = X_val[all_continuous].fillna(train_medians)
         X_test[all_continuous] = X_test[all_continuous].fillna(train_medians)
         
         if soil_cols:
             X_train[soil_cols] = X_train[soil_cols].fillna(0.0)
+            X_val[soil_cols] = X_val[soil_cols].fillna(0.0)
             X_test[soil_cols] = X_test[soil_cols].fillna(0.0)
             
-        # 7. Standard Scaling on training set
+        # 7. Standard Scaling fitted on the training set only
         X_train[all_continuous] = self.scaler.fit_transform(X_train[all_continuous])
+        X_val[all_continuous] = self.scaler.transform(X_val[all_continuous])
         X_test[all_continuous] = self.scaler.transform(X_test[all_continuous])
         
         # 8. Final cast to float
         X_train = X_train.astype(float)
+        X_val = X_val.astype(float)
         X_test = X_test.astype(float)
         y_train = y_train.astype(float)
+        y_val = y_val.astype(float)
         y_test = y_test.astype(float)
         
         self.df_encoded = df_encoded
         
-        return X_train, X_test, y_train, y_test
+        # Return combined train+val as a unified matrix for models that don't need independent validation validation early stopping, 
+        # but keep them clean for XGBoost early stopping.
+        return X_train, X_val, X_test, y_train, y_val, y_test
 
-    def run_baselines(self, X_train, X_test, y_train, y_test):
+    def run_baselines(self, X_train, X_val, X_test, y_train, y_val, y_test):
         """
-        Trains and evaluates OLS, GLM Gaussian, Random Forest, and XGBoost baselines.
+        Trains and evaluates GLM Gaussian, Random Forest, and XGBoost baselines on the uniform test set.
         """
         results = {}
         
-        # --- 1. OLS / GLM Gaussian ---
-        print("Training OLS / GLM Gaussian...")
+        # --- 1. GLM Gaussian ---
+        print("Training GLM Gaussian...")
         # Add intercept specifically for statsmodels fit
         X_train_const = sm.add_constant(X_train)
+        X_val_const = sm.add_constant(X_val, has_constant='add')
         X_test_const = sm.add_constant(X_test, has_constant='add')
         
         glm_model = sm.GLM(y_train, X_train_const, family=sm.families.Gaussian())
         self.glm_results = glm_model.fit()  
         
-        # Save wrapped versions to the models dictionary to handle direct raw predict calls safely
         wrapped_glm = StatsmodelsPredictionWrapper(self.glm_results)
         self.models['GLM_Gaussian'] = wrapped_glm
-        self.models['OLS'] = wrapped_glm
         
         print("\n" + "="*50)
         print("                 GLM GAUSSIAN SUMMARY")
@@ -176,17 +190,20 @@ class NDVIBaselines:
         print(self.glm_results.summary())
         print("="*50 + "\n")
         
-        # Predict GLM
-        glm_preds = self.glm_results.predict(X_test_const)
+        # Evaluate GLM on both Val and Test
+        glm_val_preds = self.glm_results.predict(X_val_const)
+        glm_test_preds = self.glm_results.predict(X_test_const)
+        
         results['GLM_Gaussian'] = {
-            'R2': r2_score(y_test, glm_preds),
-            'RMSE': np.sqrt(mean_squared_error(y_test, glm_preds)),
-            'MAE': mean_absolute_error(y_test, glm_preds)
+            'Val_R2': r2_score(y_val, glm_val_preds),
+            'Test_R2': r2_score(y_test, glm_test_preds),
+            'Val_RMSE': np.sqrt(mean_squared_error(y_val, glm_val_preds)),
+            'Test_RMSE': np.sqrt(mean_squared_error(y_test, glm_test_preds)),
+            'MAE': mean_absolute_error(y_test, glm_test_preds)
         }
-        results['OLS'] = results['GLM_Gaussian']
 
-        # 2. Random Forest Regressor 
-        print("Training Random Forest (this may take a few minutes)...")
+        # --- 2. Random Forest Regressor ---
+        print("Training Random Forest...")
         rf = RandomForestRegressor(
             n_estimators=400, 
             max_depth=20, 
@@ -196,28 +213,26 @@ class NDVIBaselines:
             n_jobs=-1
         )
         rf.fit(X_train, y_train)
-        rf_preds = rf.predict(X_test)
+        
+        rf_val_preds = rf.predict(X_val)
+        rf_test_preds = rf.predict(X_test)
+        
         results['RandomForest'] = {
-            'R2': r2_score(y_test, rf_preds),
-            'RMSE': np.sqrt(mean_squared_error(y_test, rf_preds)),
-            'MAE': mean_absolute_error(y_test, rf_preds)
+            'Val_R2': r2_score(y_val, rf_val_preds),
+            'Test_R2': r2_score(y_test, rf_test_preds),
+            'Val_RMSE': np.sqrt(mean_squared_error(y_val, rf_val_preds)),
+            'Test_RMSE': np.sqrt(mean_squared_error(y_test, rf_test_preds)),
+            'MAE': mean_absolute_error(y_test, rf_test_preds)
         }
         
         self.models['RandomForest'] = rf
-        
-        # Map feature importances 
         self.rf_feature_importance = pd.Series(
             rf.feature_importances_, 
             index=self.features
         ).sort_values(ascending=False)
 
-        # 3. XGBoost Regressor 
-        print("Training XGBoost...")
-        # Early stopping validation split from train set 
-        val_size = int(len(X_train) * 0.1)
-        X_tr, X_val = X_train.iloc[:-val_size], X_train.iloc[-val_size:]
-        y_tr, y_val = y_train.iloc[:-val_size], y_train.iloc[-val_size:]
-        
+        # --- 3. XGBoost Regressor ---
+        print("Training XGBoost with Early Stopping on the Validation Set...")
         xgb = XGBRegressor(
             n_estimators=400,
             max_depth=8,
@@ -230,37 +245,41 @@ class NDVIBaselines:
             early_stopping_rounds=30
         )
         
+        # Train strictly on X_train, evaluate early stopping rounds on true X_val
         xgb.fit(
-            X_tr, y_tr,
+            X_train, y_train,
             eval_set=[(X_val, y_val)],
             verbose=50
         )
         
-        xgb_preds = xgb.predict(X_test)
+        xgb_val_preds = xgb.predict(X_val)
+        xgb_test_preds = xgb.predict(X_test)
+        
         results['XGBoost'] = {
-            'R2': r2_score(y_test, xgb_preds),
-            'RMSE': np.sqrt(mean_squared_error(y_test, xgb_preds)),
-            'MAE': mean_absolute_error(y_test, xgb_preds)
+            'Val_R2': r2_score(y_val, xgb_val_preds),
+            'Test_R2': r2_score(y_test, xgb_test_preds),
+            'Val_RMSE': np.sqrt(mean_squared_error(y_val, xgb_val_preds)),
+            'Test_RMSE': np.sqrt(mean_squared_error(y_test, xgb_test_preds)),
+            'MAE': mean_absolute_error(y_test, xgb_test_preds)
         }
         
-        # Save to models dictionary
         self.models['XGBoost'] = xgb
         
-        # Print Performance Matrix 
-        print("\n" + "="*50)
-        print("         BASELINE MODEL PERFORMANCE ON FORWARD TEST SET")
-        print("="*50)
-        print(f"{'Model':<15} {'R2_Score':<10} {'RMSE':<10} {'MAE':<10}")
+        # Print Consolidated Performance Matrix 
+        print("\n" + "="*85)
+        print("         CORRECTED BASELINE PERFORMANCE ON TRUE CROSS-VALIDATED TIMESTEPS")
+        print("="*85)
+        print(f"{'Model':<15} {'Val R2':<10} {'Test R2':<10} {'R2 Delta':<10} {'Val RMSE':<10} {'Test RMSE':<10}")
         for model_name, metrics in results.items():
-            print(f"{model_name:<15} {metrics['R2']:.6f}   {metrics['RMSE']:.6f}   {metrics['MAE']:.6f}")
-        print("="*50)
+            r2_delta = metrics['Test_R2'] - metrics['Val_R2']
+            print(f"{model_name:<15} {metrics['Val_R2']:.4f}     {metrics['Test_R2']:.4f}     {r2_delta:+.4f}    {metrics['Val_RMSE']:.4f}     {metrics['Test_RMSE']:.4f}")
+        print("="*85)
         
         return results
 
-    # Alias evaluate_all to run_baselines to maintain compatibility with analyze_and_tune.py
-    def evaluate_all(self, X_train, X_test, y_train, y_test):
-        return self.run_baselines(X_train, X_test, y_train, y_test)
+    def evaluate_all(self, X_train, X_val, X_test, y_train, y_val, y_test):
+        return self.run_baselines(X_train, X_val, X_test, y_train, y_val, y_test)
 
 
 if __name__ == "__main__":
-    print("Baseline script compiled successfully.")
+    print("Baseline script successfully adapted to three-way split configuration.")

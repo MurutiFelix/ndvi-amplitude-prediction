@@ -32,7 +32,7 @@ def main():
     print("\n=== BASELINE MODEL PERFORMANCE ON FORWARD TEST SET ===")
     print(metrics_df.to_string())
 
-    # --- GLM summary ---
+    # GLM summary 
     print("\n=== GLM GAUSSIAN SUMMARY ===")
     print(evaluator.glm_results.summary())
     glm_summary_path = os.path.join(config['paths']['processed_dir'], "glm_summary.txt")
