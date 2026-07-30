@@ -30,7 +30,7 @@ This work is based on the methodology from:
 ├── src/                               # MAIN SOURCE CODE HERE 
 │   ├── config.yaml                     # Centralized pipeline configuration (hyperparameters, paths, random seeds, lags)
 │   ├── train.py                        # Root execution orchestrator that imports modules to run the entire end-to-end pipeline
-│   ├── predict.py                       
+│   ├── predict.py                      # Out-of-sample forward inference engine
 │   ├── logs/                           # Automated cluster logs directory (captures stdout/stderr from Slurm execution runs)
 │   ├── data/                           # Data Engineering
 │   │   ├── dataset.py                  # Custom PyTorch Dataset/Loader streaming architectures for neural network training
@@ -38,6 +38,7 @@ This work is based on the methodology from:
 │   │   └── analyze_and_tune.py         #Baseline training orchestrator, feature importance extraction, spatial residual mapping, and HT
 │   ├── models/                         # ----
 │   │   ├── run_baselines.sh            # Slurm cluster shell script containing partition nodes, environments, and execution tasks
+│   │   ├── run_dl.sh                   # Slurm cluster shell script for running the dl training
 │   │   ├── baselines.py                # Pipeline class containing cyclic time mapping, interaction features, and baseline models (XGB/RF)
 │   │   ├── train.py                    # Model training loops, tracking, and metric evaluation modules specifically for Deep Learning models
 │   │   ├── spatio_temporal.py          # Custom Deep Learning neural architectures (CNN, LSTM, or Transformer encoders)
@@ -67,14 +68,14 @@ Treats each pixel as a node in a graph (159×181 = 28,779 nodes).
  8-connectivity (queen contiguity) for spatial edges.
 Enables models to learn spatial dependencies and propagation patterns.
 
-## Step 1 — Clone to scratch 
+## Step 1: Clone Project to Scratch
+Ensure execution runs inside your cluster’s scratch space:
 
 ```bash
 cd /scratch/lustre/users/$USER
-git clone https://github.com/YOUR_USERNAME/project.git
-cd project
+git clone [https://github.com/YOUR_USERNAME/ndvi-amplitude-prediction.git](https://github.com/YOUR_USERNAME/ndvi-amplitude-prediction.git)
+cd ndvi-amplitude-prediction
 ```
-
 ---
 
 ## Step 2 — Load the GPU Python module
@@ -145,9 +146,13 @@ Debug complete.
 ## Step 6 — Submit the full training job
 
 ```bash
-sbatch train.slurm
+sbatch src/models/run_baselines.sh
 ```
-
+That trains te baseline models
+For deep learning use:
+```bash
+sbatch src/models/run_dl.sh
+```
 You'll receive:
 ```
 Submitted batch job xyz
@@ -166,7 +171,7 @@ The Slurm script runs all 5 phases sequentially in one 72-hour job:
 squeue -u $USER
 
 # Live log tail
-tail -f /scratch/lustre/users/$USER/project/logs/train.xyz.out
+tail -f /scratch/lustre/users/$USER/yourprojectname/logs/train.xyz.out
 
 # GPU utilisation (inside interactive job)
 srun --gres=gpu:1 --partition=gpu1 --time=00:10:00 --pty bash -i
@@ -186,27 +191,12 @@ jobmem
 
 | Resource | Value | Reason |
 |---|---|---|
-| `--gres=gpu:2` | Both L40s | DDP doubles effective batch; halves wall time |
+| `--gres=gpu:1` | One L40s |  |
 | `--mem=300000` | 300 GB | Patch loading + DataLoader prefetch buffers |
 | `--cpus-per-task=48` | 48 cores | 16 DataLoader workers × 2 GPU processes + headroom |
-| `--time=72:00:00` | 72 h | Paper reports ~72h for 1M-iteration Model 1 |
+| `--time=16:00:00` | 72 h |Current runs use 16hrs on the gpu
 | `batch_size=64` | 32/GPU | Fills 48 GB L40 VRAM for 128px patches |
 | `workers=16` | 8/GPU | Keeps GPU feed-starved minimised |
 
 ---
 
-## HPC best-practice checklist
-
-- ✅ All data and checkpoints on `/scratch/lustre/users/$USER/` (never `$HOME`)
-- ✅ Patch extraction done once and reused across all 9 models
-- ✅ Checkpoints saved every 10,000 iterations with 3-checkpoint rolling window
-- ✅ `torchrun --nproc_per_node=2` for DistributedDataParallel across both L40s
-- ✅ Mixed precision (AMP) via `GradScaler` for memory efficiency
-- ✅ `CosineAnnealingLR` scheduler across full 1M iterations
-- ✅ `jobmem` called at end of job to tune memory for future runs
-- ✅ Debug job validates full pipeline before committing to 72-hour run
-
-
----
-
-## Expected results 
