@@ -20,16 +20,17 @@ def main():
     processed_path = os.path.join(config['paths']['processed_dir'], "tabular_dataset.csv")
     df = pd.read_csv(processed_path)
 
-    # Split data chronologically and apply standard scaling
-    X_train, X_test, y_train, y_test = evaluator.prepare_data(
-        df, train_split_year=config['features']['train_split_year']
+    # Split data chronologically and apply standard scaling (True Three-Way Split Setup)
+    X_train, X_val, X_test, y_train, y_val, y_test = evaluator.prepare_data(
+        df, 
+        train_split_year=config['features']['train_split_year']
     )
 
     # Train baselines and calculate metrics
     print(f"\nExecuting baseline evaluations across {X_train.shape[1]} features...")
-    results = evaluator.evaluate_all(X_train, X_test, y_train, y_test)
+    results = evaluator.evaluate_all(X_train, X_val, X_test, y_train, y_val, y_test)
     metrics_df = pd.DataFrame(results).T
-    print("\n=== BASELINE MODEL PERFORMANCE ON FORWARD TEST SET ===")
+    print("\n=== BASELINE MODEL PERFORMANCE MATRICES ===")
     print(metrics_df.to_string())
 
     # GLM summary 
@@ -65,22 +66,18 @@ def main():
     )
     print("Top 10 XGBoost Features:\n", xgb_fi.head(10))
 
-    # Multi-Model Prediction and Residual Extraction 
+    # Multi-Model Prediction and Residual Extraction on the Held-Out Test Set
     print("\nComputing test set predictions for all baseline models...")
     
-    # Generate predictions for Scikit-Learn / XGBoost models
-    ols_preds = evaluator.models["OLS"].predict(X_test)
     rf_preds  = evaluator.models["RandomForest"].predict(X_test)
     xgb_preds = xgb_model.predict(X_test)
     
-    # Generate predictions for statsmodels GLM 
-    X_test_const = sm.add_constant(X_test, has_constant='add')
-    glm_preds = evaluator.glm_results.predict(X_test_const)
+    # Generate predictions for statsmodels GLM (using the wrapped prediction method)
+    glm_preds = evaluator.models["GLM_Gaussian"].predict(X_test)
     
-    # Create the multi-model diagnostics DataFrame
+    # Create the multi-model diagnostics DataFrame (OLS removed completely)
     error_diagnostics = pd.DataFrame({
         'true_log_ndvi' : y_test.values,
-        'OLS_pred'      : ols_preds,
         'GLM_pred'      : glm_preds,
         'RF_pred'       : rf_preds,
         'XGBoost_pred'  : xgb_preds
@@ -101,7 +98,6 @@ def main():
             writer.writerows(chunk)
 
     print(f"Residual analysis saved successfully. Test set Mean Absolute Errors (MAE):")
-    print(f"  OLS MAE:     {np.abs(y_test.values - ols_preds).mean():.5f}")
     print(f"  GLM MAE:     {np.abs(y_test.values - glm_preds).mean():.5f}")
     print(f"  RF MAE:      {np.abs(y_test.values - rf_preds).mean():.5f}")
     print(f"  XGBoost MAE: {np.abs(y_test.values - xgb_preds).mean():.5f}")
@@ -124,7 +120,7 @@ def main():
         n_jobs=-1
     )
 
-    # TimeSeriesSplit preserves temporal order 
+    # TimeSeriesSplit preserves historical temporal order over the training split
     tscv = TimeSeriesSplit(n_splits=3)
 
     search = RandomizedSearchCV(
