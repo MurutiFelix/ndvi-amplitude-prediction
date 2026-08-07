@@ -27,15 +27,18 @@ This work is based on the methodology from:
 │   ├── raw/                            # Dynamic spatiotemporal rasters (.tif) from MODIS & ERA5 (NDVI, LST, Precip), and population ratsers
 │   ├── static/                         # Landscape-invariant rasters (.tif) dictating constraints (TWI, Soil DSMW)
 │   └── processed/                      # Output matrix cache (tabular_dataset.csv, baseline scores, GLM regression reports)
+│   │
 ├── src/                               # MAIN SOURCE CODE HERE 
 │   ├── config.yaml                     # Centralized pipeline configuration (hyperparameters, paths, random seeds, lags)
 │   ├── train.py                        # Root execution orchestrator that imports modules to run the entire end-to-end pipeline
 │   ├── predict.py                      # Out-of-sample forward inference engine
 │   ├── logs/                           # Automated cluster logs directory (captures stdout/stderr from Slurm execution runs)
+│   │
 │   ├── data/                           # Data Engineering
 │   │   ├── dataset.py                  # Custom PyTorch Dataset/Loader streaming architectures for neural network training
 │   │   ├── raster_processor.py         # Heavy geospatial engine: handles raster alignment, coordinate mapping, and 3D-to-2D flattening
 │   │   └── analyze_and_tune.py         #Baseline training orchestrator, feature importance extraction, spatial residual mapping, and HT
+│   │  
 │   ├── models/                         # ----
 │   │   ├── run_baselines.sh            # Slurm cluster shell script containing partition nodes, environments, and execution tasks
 │   │   ├── run_dl.sh                   # Slurm cluster shell script for running the dl training
@@ -43,8 +46,10 @@ This work is based on the methodology from:
 │   │   ├── train.py                    # Model training loops, tracking, and metric evaluation modules specifically for Deep Learning models
 │   │   ├── spatio_temporal.py          # Custom Deep Learning neural architectures (CNN, LSTM, or Transformer encoders)
 │   │   └── loss.py                     # Custom loss functions tailored for spatial optimization and amplitude variance penalties
+│   │
 │   └── utils/                          # Utilitiies
 │       └── spatial.py                  # Spatial helper functions (coordinate conversions, windowing, spatial weight matrices)
+│
 └── requirements.txt                   # Project environment dependencies lockfile    
 
 ```
